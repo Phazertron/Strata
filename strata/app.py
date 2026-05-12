@@ -116,6 +116,30 @@ def init_db():
         """)
 
 
+def _purge_orphan_events():
+    """Remove play_events whose track folder no longer exists."""
+    if not TRACKS_DIR.exists():
+        return
+    existing = {d.name for d in TRACKS_DIR.iterdir() if d.is_dir()}
+    with get_db() as conn:
+        if existing:
+            placeholders = ",".join("?" * len(existing))
+            conn.execute(
+                f"DELETE FROM play_events WHERE track_id NOT IN ({placeholders})",
+                list(existing),
+            )
+        else:
+            conn.execute("DELETE FROM play_events")
+
+
+def _schedule_daily_cleanup():
+    """Purge orphan events once per day in the background."""
+    _purge_orphan_events()
+    t = threading.Timer(86400, _schedule_daily_cleanup)
+    t.daemon = True
+    t.start()
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -176,7 +200,7 @@ def update_track(track_id):
     if not meta:
         abort(404)
     body = request.get_json(force=True)
-    for field in ("title", "mood_tags", "segments", "source_channel"):
+    for field in ("title", "mood_tags", "segments", "source_channel", "custom_label"):
         if field in body:
             meta[field] = body[field]
     save_metadata(track_id, meta)
@@ -189,7 +213,89 @@ def delete_track(track_id):
     if not track_dir.exists():
         abort(404)
     shutil.rmtree(track_dir)
+    with get_db() as conn:
+        conn.execute("DELETE FROM play_events WHERE track_id = ?", (track_id,))
     return jsonify({"deleted": track_id})
+
+
+@app.route("/api/admin/cleanup", methods=["POST"])
+def cleanup_orphans():
+    """Delete play_events rows whose track folder no longer exists."""
+    with get_db() as conn:
+        before = conn.execute("SELECT COUNT(*) FROM play_events").fetchone()[0]
+    _purge_orphan_events()
+    with get_db() as conn:
+        after = conn.execute("SELECT COUNT(*) FROM play_events").fetchone()[0]
+    return jsonify({"deleted_events": before - after})
+
+
+@app.route("/api/admin/repair", methods=["POST"])
+def repair_tracks():
+    """Reconstruct metadata.json for track folders that have audio but no metadata.
+    Covers downloads that completed but lost their metadata due to the old code."""
+    repaired, skipped, failed = [], [], []
+
+    if not TRACKS_DIR.exists():
+        return jsonify({"repaired": 0, "skipped": 0, "failed": []})
+
+    for track_dir in TRACKS_DIR.iterdir():
+        if not track_dir.is_dir():
+            continue
+        track_id = track_dir.name
+
+        if (track_dir / "metadata.json").exists():
+            skipped.append(track_id)
+            continue
+
+        if not (track_dir / "audio.mp3").exists():
+            failed.append({"id": track_id, "reason": "no audio.mp3"})
+            continue
+
+        # Read info JSON (may be named audio.info.json or track.info.json)
+        info = {}
+        for info_file in track_dir.glob("*.info.json"):
+            try:
+                info = json.loads(info_file.read_text())
+                break
+            except Exception:
+                pass
+
+        # Normalize thumbnail: pick first jpg/webp, rename to thumbnail.jpg
+        thumb_name = None
+        for ext in ("jpg", "jpeg", "webp", "png"):
+            candidates = list(track_dir.glob(f"*.{ext}"))
+            if candidates:
+                src = candidates[0]
+                dest = track_dir / "thumbnail.jpg"
+                if src != dest:
+                    src.rename(dest)
+                thumb_name = "thumbnail.jpg"
+                break
+
+        # Remove raw video files left behind by yt-dlp
+        for raw in list(track_dir.glob("*.webm")) + list(track_dir.glob("*.mp4")):
+            raw.unlink(missing_ok=True)
+
+        meta = {
+            "id": track_id,
+            "title": info.get("title") or track_id[:12],
+            "source_url": info.get("webpage_url") or info.get("original_url"),
+            "source_channel": info.get("uploader") or info.get("channel"),
+            "thumbnail": thumb_name,
+            "duration_seconds": info.get("duration"),
+            "date_added": datetime.now(timezone.utc).isoformat(),
+            "mood_tags": [],
+            "segments": [],
+            "custom_label": None,
+        }
+
+        try:
+            save_metadata(track_id, meta)
+            repaired.append(track_id)
+        except Exception as exc:
+            failed.append({"id": track_id, "reason": str(exc)})
+
+    return jsonify({"repaired": len(repaired), "skipped": len(skipped), "failed": failed})
 
 
 # Serve audio and thumbnails for a track

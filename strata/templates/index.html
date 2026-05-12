@@ -12,6 +12,16 @@
   <!-- ── Header ─────────────────────────────────────────────────────────── -->
   <header>
     <h1>Strata</h1>
+
+    <div id="transport">
+      <button id="transport-play" class="transport-btn" title="Play / Pause all (Space)">▶</button>
+      <span id="transport-label">No tracks</span>
+      <div id="master-vol-wrap">
+        <span>Vol</span>
+        <input id="master-vol" type="range" min="0" max="1" step="0.01" value="1">
+      </div>
+    </div>
+
     <nav>
       <button data-view="mixer"   class="active">Mixer</button>
       <button data-view="library">Library</button>
@@ -24,11 +34,6 @@
     <!-- ── Mixer view ───────────────────────────────────────────────────── -->
     <div id="mixer-view" class="view active">
       <div id="mixer-controls">
-        <div id="master-vol-wrap">
-          <span>Master</span>
-          <input id="master-vol" type="range" min="0" max="1" step="0.01" value="1">
-        </div>
-
         <div id="preset-controls">
           <select id="preset-select"></select>
           <button class="btn secondary" id="save-preset-btn" title="Save current mixer as preset">Save preset</button>
@@ -151,12 +156,21 @@
 
     <div style="display:flex;flex-direction:column;gap:10px">
       <div>
-        <label style="font-size:11px;color:var(--text-dim);display:block;margin-bottom:4px">Title</label>
-        <input id="edit-title" class="text-input" type="text">
+        <label style="font-size:11px;color:var(--text-dim);display:block;margin-bottom:4px">Custom label <span style="opacity:.5">(optional — overrides title in library and mixer)</span></label>
+        <input id="edit-custom-label" class="text-input" type="text" placeholder="Leave empty to use original title">
       </div>
-      <div>
-        <label style="font-size:11px;color:var(--text-dim);display:block;margin-bottom:4px">Channel</label>
-        <input id="edit-channel" class="text-input" type="text" placeholder="e.g. Ambient Worlds">
+      <div id="edit-originals" style="padding:8px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius)">
+        <div style="font-size:10px;color:var(--text-dim);margin-bottom:4px;text-transform:uppercase;letter-spacing:.05em">Original metadata</div>
+        <div style="display:flex;flex-direction:column;gap:6px">
+          <div>
+            <label style="font-size:11px;color:var(--text-dim);display:block;margin-bottom:3px">Title</label>
+            <input id="edit-title" class="text-input" type="text" style="background:transparent;border-color:var(--border)">
+          </div>
+          <div>
+            <label style="font-size:11px;color:var(--text-dim);display:block;margin-bottom:3px">Channel</label>
+            <input id="edit-channel" class="text-input" type="text" placeholder="e.g. Ambient Worlds" style="background:transparent;border-color:var(--border)">
+          </div>
+        </div>
       </div>
       <div>
         <label style="font-size:11px;color:var(--text-dim);display:block;margin-bottom:4px">Mood tags (comma-separated)</label>

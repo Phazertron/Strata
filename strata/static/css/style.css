@@ -42,6 +42,50 @@ header {
   flex-shrink: 0;
 }
 
+/* ── Transport ────────────────────────────────────────────────────────────── */
+#transport {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  height: 100%;
+}
+
+.transport-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: none;
+  color: #fff;
+  cursor: pointer;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+.transport-btn:hover { background: var(--accent2); }
+
+#transport-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  min-width: 56px;
+}
+
+#master-vol-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+#master-vol { width: 80px; }
+
 header h1 {
   font-size: 18px;
   font-weight: 700;
@@ -99,16 +143,6 @@ main {
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
-
-#master-vol-wrap {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--text-dim);
-}
-
-#master-vol { width: 120px; }
 
 #preset-controls {
   display: flex;
@@ -726,6 +760,39 @@ input[type=range]::-webkit-slider-thumb {
   white-space: nowrap;
 }
 .seg-extract-mix:hover { background: var(--accent); color: #fff; }
+
+/* ── Mixer slot name (contenteditable custom label) ──────────────────────── */
+.slot-name {
+  font-weight: 700;
+  font-size: 13px;
+  outline: none;
+  border-radius: 4px;
+  padding: 2px 4px;
+  margin: -2px -4px 2px;
+  min-height: 20px;
+  cursor: text;
+  transition: background 0.1s;
+  color: var(--text);
+}
+.slot-name:focus {
+  background: var(--surface2);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+/* Placeholder shown when empty and not focused */
+.slot-name.empty:not(:focus)::before {
+  content: attr(data-placeholder);
+  color: var(--text);
+  pointer-events: none;
+}
+
+.slot-origin {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-bottom: 2px;
+  transition: opacity 0.15s;
+}
+/* When user has set a custom name, dim the original info */
+.slot-origin.origin-dimmed { opacity: 0.4; }
 
 /* ── Mixer seek row ───────────────────────────────────────────────────────── */
 .mixer-seek-row {

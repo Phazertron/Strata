@@ -129,9 +129,12 @@
     </div>
 
     <div id="download-panel" class="modal-panel">
-      <input id="yt-url" class="text-input" type="url" placeholder="https://www.youtube.com/watch?v=…">
-      <p style="font-size:11px;color:var(--text-dim)">Audio is extracted with yt-dlp and saved as MP3. Thumbnail and metadata are imported automatically.</p>
+      <div style="display:flex;gap:8px">
+        <input id="yt-url" class="text-input" type="url" placeholder="https://www.youtube.com/watch?v=…" style="flex:1">
+      </div>
+      <p style="font-size:11px;color:var(--text-dim)">Paste a URL and click Download — you can queue multiple. Tracks appear in the library as each finishes.</p>
       <p id="download-status" style="font-size:12px;color:var(--text-dim);min-height:18px"></p>
+      <div id="job-queue"></div>
     </div>
 
     <div class="modal-actions">
@@ -162,16 +165,36 @@
     </div>
 
     <div style="margin-top:14px">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <div style="margin-bottom:10px">
         <span style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-dim)">Segments</span>
       </div>
       <div id="seg-list" class="seg-list"></div>
 
-      <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-        <input id="seg-name"  class="text-input" type="text"   placeholder="Segment name"    style="flex:2;min-width:120px">
-        <input id="seg-start" class="text-input" type="number" placeholder="Start (s)"       style="flex:1;min-width:80px"  min="0" step="1">
-        <input id="seg-end"   class="text-input" type="number" placeholder="End (s)"         style="flex:1;min-width:80px"  min="0" step="1">
-        <button id="add-seg-btn" class="btn secondary" style="white-space:nowrap">＋ Add</button>
+      <!-- Visual trim slider (shown when duration is known) -->
+      <div id="seg-timeline-wrap" style="display:none;margin-top:12px">
+        <div class="dual-range">
+          <div class="dr-bg"><div class="dr-fill" id="dr-fill"></div></div>
+          <input type="range" class="dr-thumb" id="dr-start" min="0" max="1000" value="0">
+          <input type="range" class="dr-thumb" id="dr-end"   min="0" max="1000" value="1000">
+        </div>
+        <div class="dr-labels">
+          <span id="dr-start-label">0:00</span>
+          <span id="dr-end-label">—</span>
+        </div>
+      </div>
+
+      <!-- Name + number inputs (synced with slider) -->
+      <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:flex-start">
+        <input id="seg-name" class="text-input" type="text" placeholder="Segment name" style="flex:2;min-width:120px">
+        <div class="seg-input-group">
+          <input id="seg-start" class="text-input" type="number" placeholder="Start (s)" style="width:88px" min="0" step="1">
+          <span id="seg-start-fmt" class="seg-input-fmt">0:00</span>
+        </div>
+        <div class="seg-input-group">
+          <input id="seg-end" class="text-input" type="number" placeholder="End (s)" style="width:88px" min="0" step="1">
+          <span id="seg-end-fmt" class="seg-input-fmt">—</span>
+        </div>
+        <button id="add-seg-btn" class="btn secondary" style="white-space:nowrap;align-self:flex-start">＋ Add</button>
       </div>
     </div>
 
@@ -185,15 +208,6 @@
 <!-- ── Toast ───────────────────────────────────────────────────────────── -->
 <div id="toast"></div>
 
-<script>
-  // Show download button only on download panel
-  document.querySelectorAll(".modal-tab").forEach(btn => {
-    btn.addEventListener("click", () => {
-      const downloadBtn = document.getElementById("download-btn");
-      downloadBtn.style.display = btn.dataset.panel === "download-panel" ? "inline-flex" : "none";
-    });
-  });
-</script>
 <script src="/static/js/app.js"></script>
 </body>
 </html>

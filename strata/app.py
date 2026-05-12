@@ -4,6 +4,7 @@ import json
 import shutil
 import subprocess
 import sqlite3
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -15,6 +16,75 @@ PRESETS_DIR = MEDIA_ROOT / "presets"
 DB_PATH = MEDIA_ROOT / "telemetry.db"
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
+
+# ---------------------------------------------------------------------------
+# Download job queue (in-memory, lives for the process lifetime)
+# ---------------------------------------------------------------------------
+
+_jobs: dict = {}          # job_id → {status, url, track_id, track?, error?}
+_jobs_lock = threading.Lock()
+
+
+def _run_download_job(job_id: str, url: str, track_id: str, track_dir: Path):
+    with _jobs_lock:
+        _jobs[job_id]["status"] = "running"
+    try:
+        cmd = [
+            "yt-dlp",
+            "--extract-audio",
+            "--audio-format", "mp3",
+            "--audio-quality", "0",
+            "--write-thumbnail",
+            "--write-info-json",
+            "--convert-thumbnails", "jpg",
+            "-o", str(track_dir / "track.%(ext)s"),
+            url,
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(track_dir))
+        if result.returncode != 0:
+            shutil.rmtree(track_dir, ignore_errors=True)
+            with _jobs_lock:
+                _jobs[job_id].update({"status": "error", "error": result.stderr[-2000:]})
+            return
+
+        src_mp3 = track_dir / "track.mp3"
+        if src_mp3.exists():
+            src_mp3.rename(track_dir / "audio.mp3")
+
+        info_files = list(track_dir.glob("track.info.json"))
+        info = {}
+        if info_files:
+            info = json.loads(info_files[0].read_text())
+
+        thumb_candidates = list(track_dir.glob("track.jpg")) + list(track_dir.glob("track.webp"))
+        thumb_name = None
+        if thumb_candidates:
+            thumb_src = thumb_candidates[0]
+            thumb_dest = track_dir / "thumbnail.jpg"
+            if thumb_src != thumb_dest:
+                thumb_src.rename(thumb_dest)
+            thumb_name = "thumbnail.jpg"
+
+        meta = {
+            "id": track_id,
+            "title": info.get("title", "Unknown"),
+            "source_url": url,
+            "source_channel": info.get("uploader") or info.get("channel"),
+            "thumbnail": thumb_name,
+            "duration_seconds": info.get("duration"),
+            "date_added": datetime.now(timezone.utc).isoformat(),
+            "mood_tags": [],
+            "segments": [],
+        }
+        save_metadata(track_id, meta)
+
+        with _jobs_lock:
+            _jobs[job_id].update({"status": "done", "track": meta})
+
+    except Exception as exc:
+        shutil.rmtree(track_dir, ignore_errors=True)
+        with _jobs_lock:
+            _jobs[job_id].update({"status": "error", "error": str(exc)})
 
 
 # ---------------------------------------------------------------------------
@@ -182,61 +252,36 @@ def download_track():
     if not url:
         return jsonify({"error": "url required"}), 400
 
+    job_id = str(uuid.uuid4())
     track_id = str(uuid.uuid4())
     track_dir = TRACKS_DIR / track_id
     track_dir.mkdir(parents=True)
 
-    # Single output template — produces track.mp3, track.jpg, track.info.json
-    cmd = [
-        "yt-dlp",
-        "--extract-audio",
-        "--audio-format", "mp3",
-        "--audio-quality", "0",
-        "--write-thumbnail",
-        "--write-info-json",
-        "--convert-thumbnails", "jpg",
-        "-o", str(track_dir / "track.%(ext)s"),
-        url,
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(track_dir))
-    if result.returncode != 0:
-        shutil.rmtree(track_dir, ignore_errors=True)
-        return jsonify({"error": "yt-dlp failed", "detail": result.stderr[-2000:]}), 500
+    with _jobs_lock:
+        _jobs[job_id] = {"status": "queued", "url": url, "track_id": track_id}
 
-    # Rename track.mp3 → audio.mp3
-    src_mp3 = track_dir / "track.mp3"
-    if src_mp3.exists():
-        src_mp3.rename(track_dir / "audio.mp3")
+    threading.Thread(
+        target=_run_download_job,
+        args=(job_id, url, track_id, track_dir),
+        daemon=True,
+    ).start()
 
-    # Parse info JSON
-    info_files = list(track_dir.glob("track.info.json"))
-    info = {}
-    if info_files:
-        info = json.loads(info_files[0].read_text())
+    return jsonify({"job_id": job_id}), 202
 
-    # Normalise thumbnail → thumbnail.jpg
-    thumb_candidates = list(track_dir.glob("track.jpg")) + list(track_dir.glob("track.webp"))
-    thumb_name = None
-    if thumb_candidates:
-        thumb_src = thumb_candidates[0]
-        thumb_dest = track_dir / "thumbnail.jpg"
-        if thumb_src != thumb_dest:
-            thumb_src.rename(thumb_dest)
-        thumb_name = "thumbnail.jpg"
 
-    meta = {
-        "id": track_id,
-        "title": info.get("title", "Unknown"),
-        "source_url": url,
-        "source_channel": info.get("uploader") or info.get("channel"),
-        "thumbnail": thumb_name,
-        "duration_seconds": info.get("duration"),
-        "date_added": datetime.now(timezone.utc).isoformat(),
-        "mood_tags": [],
-        "segments": [],
-    }
-    save_metadata(track_id, meta)
-    return jsonify(meta), 201
+@app.route("/api/jobs", methods=["GET"])
+def list_jobs():
+    with _jobs_lock:
+        return jsonify({jid: dict(j) for jid, j in _jobs.items()})
+
+
+@app.route("/api/jobs/<job_id>", methods=["GET"])
+def get_job(job_id):
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+    if job is None:
+        abort(404)
+    return jsonify(job)
 
 
 # ---------------------------------------------------------------------------

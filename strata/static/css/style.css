@@ -675,3 +675,214 @@ input[type=range]::-webkit-slider-thumb {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+
+/* ── Library group header ─────────────────────────────────────────────────── */
+.group-header {
+  grid-column: 1 / -1;
+  font-weight: 700;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: var(--text-dim);
+  padding: 4px 0 2px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* ── Library segment sub-row ──────────────────────────────────────────────── */
+.seg-toggle-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+}
+.seg-toggle-btn:hover { text-decoration: underline; }
+
+.seg-sub-row {
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
+.seg-extract-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+.seg-extract-name  { flex: 1; font-weight: 600; color: var(--text); }
+.seg-extract-times { color: var(--text-dim); white-space: nowrap; }
+.seg-extract-mix {
+  background: var(--surface2);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  border-radius: 4px;
+  padding: 2px 6px;
+  cursor: pointer;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.seg-extract-mix:hover { background: var(--accent); color: #fff; }
+
+/* ── Mixer seek row ───────────────────────────────────────────────────────── */
+.mixer-seek-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0;
+}
+.time-display {
+  font-size: 10px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  min-width: 80px;
+}
+.seek-slider {
+  flex: 1;
+  height: 3px !important;
+  cursor: pointer;
+}
+
+/* ── Mixer segment label (when a segment is loaded) ───────────────────────── */
+.seg-label {
+  font-size: 11px;
+  color: var(--accent);
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+/* ── Sequence badge ───────────────────────────────────────────────────────── */
+.seq-badge {
+  display: inline-block;
+  background: var(--accent);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 4px;
+  padding: 1px 5px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+/* ── Mode button active ───────────────────────────────────────────────────── */
+.mode-btn.on { background: #3a5f40; border-color: #4ecb8e; color: #4ecb8e; }
+
+/* ── Dual-range slider ────────────────────────────────────────────────────── */
+.dual-range {
+  position: relative;
+  height: 28px;
+  user-select: none;
+}
+
+.dr-bg {
+  position: absolute;
+  left: 0; right: 0;
+  top: 50%; transform: translateY(-50%);
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+.dr-fill {
+  position: absolute;
+  top: 0; height: 100%;
+  background: var(--accent);
+  border-radius: 2px;
+  opacity: .7;
+}
+
+.dr-thumb {
+  position: absolute;
+  left: 0; width: 100%;
+  top: 50%; transform: translateY(-50%);
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  height: 4px;
+  pointer-events: none;
+  margin: 0;
+}
+.dr-thumb::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+  pointer-events: all;
+  border: 2px solid var(--bg);
+  transition: transform .1s;
+}
+.dr-thumb::-webkit-slider-thumb:hover { transform: scale(1.2); }
+.dr-thumb::-moz-range-thumb {
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+  pointer-events: all;
+  border: 2px solid var(--bg);
+}
+
+.dr-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-top: 4px;
+}
+
+/* ── Segment number inputs with formatted hint ────────────────────────────── */
+.seg-input-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.seg-input-fmt {
+  font-size: 10px;
+  color: var(--text-dim);
+  padding: 0 2px;
+}
+
+/* ── Download job queue ───────────────────────────────────────────────────── */
+#job-queue {
+  display: none;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 200px;
+  overflow-y: auto;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+  margin-top: 4px;
+}
+
+.job-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 10px;
+  font-size: 12px;
+}
+.job-item.job-done   { border-color: #4ecb8e33; }
+.job-item.job-error  { border-color: var(--danger); }
+
+.job-icon  { flex-shrink: 0; font-size: 13px; }
+.job-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); }
+.job-item.job-done   .job-label { color: var(--success); }
+.job-item.job-error  .job-label { color: var(--danger); }
+
+.job-dismiss {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 2px;
+  flex-shrink: 0;
+}
+.job-dismiss:hover { color: var(--text); }

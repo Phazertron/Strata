@@ -186,7 +186,7 @@ def download_track():
     track_dir = TRACKS_DIR / track_id
     track_dir.mkdir(parents=True)
 
-    # Download audio + thumbnail + write-info-json
+    # Single output template — produces track.mp3, track.jpg, track.info.json
     cmd = [
         "yt-dlp",
         "--extract-audio",
@@ -195,8 +195,7 @@ def download_track():
         "--write-thumbnail",
         "--write-info-json",
         "--convert-thumbnails", "jpg",
-        "--output", str(track_dir / "audio.%(ext)s"),
-        "--output", "thumbnail:%(title)s.%(ext)s",
+        "-o", str(track_dir / "track.%(ext)s"),
         url,
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(track_dir))
@@ -204,14 +203,19 @@ def download_track():
         shutil.rmtree(track_dir, ignore_errors=True)
         return jsonify({"error": "yt-dlp failed", "detail": result.stderr[-2000:]}), 500
 
-    # Parse yt-dlp info JSON for metadata
-    info_files = list(track_dir.glob("*.info.json"))
+    # Rename track.mp3 → audio.mp3
+    src_mp3 = track_dir / "track.mp3"
+    if src_mp3.exists():
+        src_mp3.rename(track_dir / "audio.mp3")
+
+    # Parse info JSON
+    info_files = list(track_dir.glob("track.info.json"))
     info = {}
     if info_files:
         info = json.loads(info_files[0].read_text())
 
-    # Normalise thumbnail filename
-    thumb_candidates = list(track_dir.glob("*.jpg")) + list(track_dir.glob("*.webp"))
+    # Normalise thumbnail → thumbnail.jpg
+    thumb_candidates = list(track_dir.glob("track.jpg")) + list(track_dir.glob("track.webp"))
     thumb_name = None
     if thumb_candidates:
         thumb_src = thumb_candidates[0]

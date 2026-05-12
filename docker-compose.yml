@@ -1,0 +1,29 @@
+services:
+  strata:
+    build:
+      context: ./strata
+      dockerfile: Dockerfile
+    container_name: strata
+    platform: linux/arm64
+    volumes:
+      # PLACEHOLDER — swap ./strata/media for /mnt/raid/strata/media once RAID drive voltage supply is fixed
+      - ./strata/media:/media
+    environment:
+      TZ: ${TZ}
+    networks:
+      - proxy
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.strata.rule=Host(`strata.home`)"
+      - "traefik.http.routers.strata.entrypoints=web"
+      - "traefik.http.services.strata.loadbalancer.server.port=5000"
+      - "traefik.http.routers.strata-secure.rule=Host(`strata.home`)"
+      - "traefik.http.routers.strata-secure.entrypoints=websecure"
+      - "traefik.http.routers.strata-secure.tls=true"
+      - "traefik.http.routers.strata-secure.tls.certresolver=local"
+      - "traefik.http.routers.strata-secure.service=strata"
+
+networks:
+  proxy:
+    driver: bridge

@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Strata</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- ── Header ─────────────────────────────────────────────────────────── -->
+  <header>
+    <h1>Strata</h1>
+    <nav>
+      <button data-view="mixer"   class="active">Mixer</button>
+      <button data-view="library">Library</button>
+      <button data-view="stats">Stats</button>
+    </nav>
+  </header>
+
+  <main>
+
+    <!-- ── Mixer view ───────────────────────────────────────────────────── -->
+    <div id="mixer-view" class="view active">
+      <div id="mixer-controls">
+        <div id="master-vol-wrap">
+          <span>Master</span>
+          <input id="master-vol" type="range" min="0" max="1" step="0.01" value="1">
+        </div>
+
+        <div id="preset-controls">
+          <select id="preset-select"></select>
+          <button class="btn secondary" id="save-preset-btn" title="Save current mixer as preset">Save preset</button>
+          <button class="btn secondary danger" id="delete-preset-btn" title="Delete selected preset">Delete</button>
+        </div>
+      </div>
+
+      <div id="mixer-tracks">
+        <div id="mixer-empty" style="display:none">
+          <span>♫</span>
+          <p style="color:var(--text-dim)">No tracks loaded — add from Library</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Library view ─────────────────────────────────────────────────── -->
+    <div id="library-view" class="view">
+      <div id="library-toolbar">
+        <div id="library-tabs">
+          <button class="lib-tab active" data-tab="all">All</button>
+          <button class="lib-tab" data-tab="channel">By Channel</button>
+          <button class="lib-tab" data-tab="mood">By Mood</button>
+        </div>
+        <select id="lib-sort">
+          <option value="date">Date added</option>
+          <option value="title">Title</option>
+          <option value="plays">Play count</option>
+        </select>
+        <button id="add-track-btn">＋ Add track</button>
+      </div>
+      <div id="library-grid"></div>
+    </div>
+
+    <!-- ── Stats view ───────────────────────────────────────────────────── -->
+    <div id="stats-view" class="view">
+      <div class="stats-section">
+        <h2>Listening time</h2>
+        <div class="stat-cards">
+          <div class="stat-card">
+            <div class="value" id="stat-all">—</div>
+            <div class="label">All time</div>
+          </div>
+          <div class="stat-card">
+            <div class="value" id="stat-30d">—</div>
+            <div class="label">Last 30 days</div>
+          </div>
+          <div class="stat-card">
+            <div class="value" id="stat-7d">—</div>
+            <div class="label">Last 7 days</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="stats-section">
+        <h2>Most played</h2>
+        <table class="stats-table">
+          <thead><tr><th>Track</th><th>Plays</th></tr></thead>
+          <tbody id="top-count-table"></tbody>
+        </table>
+      </div>
+
+      <div class="stats-section">
+        <h2>Most listened (by time)</h2>
+        <table class="stats-table">
+          <thead><tr><th>Track</th><th>Total time</th></tr></thead>
+          <tbody id="top-mins-table"></tbody>
+        </table>
+      </div>
+
+      <div class="stats-section">
+        <h2>Recently played</h2>
+        <table class="stats-table">
+          <thead><tr><th>Track</th><th>Last played</th></tr></thead>
+          <tbody id="recent-table"></tbody>
+        </table>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- ── Add track modal ─────────────────────────────────────────────────── -->
+<div id="add-modal" class="modal-overlay hidden">
+  <div class="modal">
+    <h2>Add track</h2>
+    <div class="modal-tabs">
+      <button class="modal-tab active" data-panel="upload-panel">Upload file</button>
+      <button class="modal-tab" data-panel="download-panel">YouTube / URL</button>
+    </div>
+
+    <div id="upload-panel" class="modal-panel active">
+      <div id="drop-zone" class="drop-zone">
+        <span>♫</span>
+        Drop an audio file here, or click to browse
+      </div>
+      <input id="file-input" type="file" accept="audio/*" style="display:none">
+      <p id="upload-status" style="font-size:12px;color:var(--text-dim);min-height:18px"></p>
+    </div>
+
+    <div id="download-panel" class="modal-panel">
+      <input id="yt-url" class="text-input" type="url" placeholder="https://www.youtube.com/watch?v=…">
+      <p style="font-size:11px;color:var(--text-dim)">Audio is extracted with yt-dlp and saved as MP3. Thumbnail and metadata are imported automatically.</p>
+      <p id="download-status" style="font-size:12px;color:var(--text-dim);min-height:18px"></p>
+    </div>
+
+    <div class="modal-actions">
+      <button id="download-btn" class="btn" style="display:none">Download</button>
+      <button id="add-modal-close" class="btn secondary">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Track detail / edit modal ───────────────────────────────────────── -->
+<div id="track-modal" class="modal-overlay hidden">
+  <div class="modal" style="width:560px">
+    <h2>Edit track</h2>
+
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div>
+        <label style="font-size:11px;color:var(--text-dim);display:block;margin-bottom:4px">Title</label>
+        <input id="edit-title" class="text-input" type="text">
+      </div>
+      <div>
+        <label style="font-size:11px;color:var(--text-dim);display:block;margin-bottom:4px">Channel</label>
+        <input id="edit-channel" class="text-input" type="text" placeholder="e.g. Ambient Worlds">
+      </div>
+      <div>
+        <label style="font-size:11px;color:var(--text-dim);display:block;margin-bottom:4px">Mood tags (comma-separated)</label>
+        <input id="edit-moods" class="text-input" type="text" placeholder="Focus, Rain, Sleep">
+      </div>
+    </div>
+
+    <div style="margin-top:14px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <span style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-dim)">Segments</span>
+      </div>
+      <div id="seg-list" class="seg-list"></div>
+
+      <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <input id="seg-name"  class="text-input" type="text"   placeholder="Segment name"    style="flex:2;min-width:120px">
+        <input id="seg-start" class="text-input" type="number" placeholder="Start (s)"       style="flex:1;min-width:80px"  min="0" step="1">
+        <input id="seg-end"   class="text-input" type="number" placeholder="End (s)"         style="flex:1;min-width:80px"  min="0" step="1">
+        <button id="add-seg-btn" class="btn secondary" style="white-space:nowrap">＋ Add</button>
+      </div>
+    </div>
+
+    <div class="modal-actions" style="margin-top:14px">
+      <button id="save-track-btn" class="btn">Save</button>
+      <button id="track-modal-close" class="btn secondary">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Toast ───────────────────────────────────────────────────────────── -->
+<div id="toast"></div>
+
+<script>
+  // Show download button only on download panel
+  document.querySelectorAll(".modal-tab").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const downloadBtn = document.getElementById("download-btn");
+      downloadBtn.style.display = btn.dataset.panel === "download-panel" ? "inline-flex" : "none";
+    });
+  });
+</script>
+<script src="/static/js/app.js"></script>
+</body>
+</html>

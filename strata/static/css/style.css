@@ -160,15 +160,6 @@ main {
   font-size: 13px;
 }
 
-#mixer-tracks {
-  flex: 1;
-  overflow-y: auto;
-  padding: 16px 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
 .mixer-track {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -263,16 +254,102 @@ main {
 .seg-chip:hover { opacity: 0.75; }
 .seg-chip.active { opacity: 1; border: 1px solid var(--accent); }
 
-#mixer-empty {
+/* ── Two-zone mixer layout ────────────────────────────────────────────────── */
+#mixer-tracks {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 20px;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  height: 100%;
-  color: var(--text-dim);
-  gap: 12px;
+  gap: 20px;
 }
-#mixer-empty span { font-size: 40px; }
+
+.mixer-zone {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.zone-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.zone-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--text-dim);
+}
+
+.zone-hint {
+  font-size: 11px;
+  color: var(--text-dim);
+  opacity: .6;
+  flex: 1;
+}
+
+.zone-tracks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.zone-empty {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.zone-empty span { font-size: 22px; }
+
+/* Queue active track highlight */
+.mixer-track.queue-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+/* Drag handle for queue items */
+.drag-handle {
+  flex-shrink: 0;
+  color: var(--text-dim);
+  font-size: 16px;
+  cursor: grab;
+  padding: 0 2px;
+  user-select: none;
+  align-self: center;
+}
+.drag-handle:active { cursor: grabbing; }
+
+.mixer-track.dragging {
+  opacity: 0.4;
+}
+
+/* Queue position badge */
+.queue-num {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-dim);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  min-width: 24px;
+  text-align: center;
+}
+.mixer-track.queue-active .queue-num {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
 
 /* ── Library view ─────────────────────────────────────────────────────────── */
 #library-view {

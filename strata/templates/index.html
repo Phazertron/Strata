@@ -42,9 +42,30 @@
       </div>
 
       <div id="mixer-tracks">
-        <div id="mixer-empty" style="display:none">
-          <span>♫</span>
-          <p style="color:var(--text-dim)">No tracks loaded — add from Library</p>
+        <!-- ── Beds zone ──────────────────────────────────────────────────── -->
+        <div class="mixer-zone" id="beds-zone">
+          <div class="zone-header">
+            <span class="zone-title">Beds</span>
+            <span class="zone-hint">All loop simultaneously</span>
+          </div>
+          <div id="beds-tracks" class="zone-tracks"></div>
+          <div id="beds-empty" class="zone-empty">
+            <span>♫</span>
+            <p>No beds — add from Library with "→ Bed"</p>
+          </div>
+        </div>
+
+        <!-- ── Queue zone ─────────────────────────────────────────────────── -->
+        <div class="mixer-zone" id="queue-zone">
+          <div class="zone-header">
+            <span class="zone-title">Queue</span>
+            <span class="zone-hint">Plays in sequence · drag to reorder</span>
+            <button class="toggle-btn on" id="queue-loop-btn" title="Loop queue when it reaches the end">🔁 Loop</button>
+          </div>
+          <div id="queue-tracks" class="zone-tracks"></div>
+          <div id="queue-empty" class="zone-empty">
+            <p>No queue — add from Library with "→ Queue"</p>
+          </div>
         </div>
       </div>
     </div>

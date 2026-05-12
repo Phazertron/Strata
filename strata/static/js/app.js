@@ -4,7 +4,7 @@
 // Audio engine
 // ---------------------------------------------------------------------------
 
-const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+const audioCtx  = new (window.AudioContext || window.webkitAudioContext)();
 const masterGain = audioCtx.createGain();
 masterGain.connect(audioCtx.destination);
 
@@ -17,20 +17,21 @@ function resumeCtx() {
 // ---------------------------------------------------------------------------
 
 // activeTracks: Map<slotId, TrackNode>
-// slotId = trackId  OR  trackId-seg-SafeName  (when a segment is loaded)
+// slotId = trackId  OR  trackId-seg-SafeName
 const activeTracks = new Map();
 
-// Ordered slot IDs for sequential playback
-let sequenceOrder = [];
+// Queue: ordered slotIds that play in sequence
+let sequenceOrder   = [];
+let currentQueueIdx = -1;   // index of the currently playing queue item
+let queueLooping    = true;
 
-// Download jobs  {jobId → {status, url, track_id, track?, error?}}
+// Download jobs
 let activeJobs = {};
-let pollTimer = null;
+let pollTimer  = null;
 
-const CROSSFADE_S = 1.5;   // crossfade duration in seconds
+const CROSSFADE_S = 1.5;
 
-let globalPaused = true;   // start paused until user has tracks loaded
-
+let globalPaused = true;
 let library  = [];
 let presets  = [];
 let currentView = "mixer";
@@ -66,15 +67,9 @@ function esc(s) {
   return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
 }
 
-// Safe HTML id/CSS selector from arbitrary string
-function safeId(str) { return String(str).replace(/[^a-zA-Z0-9_-]/g, "_"); }
-
-// Display name: custom_label if set, otherwise title
-function displayName(track) { return track.custom_label || track.title || "Untitled"; }
-
-function slotIdFor(trackId, segName) {
-  return segName ? `${trackId}-seg-${safeId(segName)}` : trackId;
-}
+function safeId(str)    { return String(str).replace(/[^a-zA-Z0-9_-]/g, "_"); }
+function slotIdFor(tid, segName) { return segName ? `${tid}-seg-${safeId(segName)}` : tid; }
+function displayName(t) { return t.custom_label || t.title || "Untitled"; }
 
 function toast(msg, isError = false) {
   const el = document.getElementById("toast");
@@ -115,7 +110,7 @@ document.querySelectorAll("nav button[data-view]").forEach(btn =>
   btn.addEventListener("click", () => switchView(btn.dataset.view)));
 
 // ---------------------------------------------------------------------------
-// Library load & render
+// Library
 // ---------------------------------------------------------------------------
 
 async function loadLibrary() {
@@ -125,7 +120,7 @@ async function loadLibrary() {
 
 function sortedTracks(tracks) {
   return [...tracks].sort((a, b) => {
-    if (libSort === "title") return a.title.localeCompare(b.title);
+    if (libSort === "title") return displayName(a).localeCompare(displayName(b));
     if (libSort === "plays") return (b._play_count || 0) - (a._play_count || 0);
     return new Date(b.date_added) - new Date(a.date_added);
   });
@@ -174,7 +169,7 @@ function makeCard(track) {
   card.dataset.id = track.id;
 
   const thumbUrl = track.thumbnail ? `/api/tracks/${track.id}/thumbnail` : null;
-  const hasSegs = track.segments?.length > 0;
+  const hasSegs  = track.segments?.length > 0;
 
   card.innerHTML = `
     ${thumbUrl
@@ -182,32 +177,36 @@ function makeCard(track) {
       : `<div class="card-thumb-placeholder">♫</div>`}
     <div class="card-body">
       <div class="card-title">${esc(displayName(track))}</div>
-      ${track.custom_label ? `<div class="card-channel" style="color:var(--text-dim);font-style:italic">${esc(track.title)}</div>` : (track.source_channel ? `<div class="card-channel">${esc(track.source_channel)}</div>` : "")}
+      ${track.custom_label
+        ? `<div class="card-channel" style="font-style:italic">${esc(track.title)}</div>`
+        : (track.source_channel ? `<div class="card-channel">${esc(track.source_channel)}</div>` : "")}
       <div class="card-moods">
         ${(track.mood_tags || []).map(m => `<span class="mood-chip">${esc(m)}</span>`).join("")}
       </div>
       <div class="card-meta">
         <span>${fmt(track.duration_seconds)}</span>
-        ${hasSegs ? `<button class="seg-toggle-btn" title="Show segments">${track.segments.length} segment${track.segments.length > 1 ? "s" : ""} ▾</button>` : ""}
+        ${hasSegs ? `<button class="seg-toggle-btn">${track.segments.length} segment${track.segments.length > 1 ? "s" : ""} ▾</button>` : ""}
         ${track.source_url ? `<a href="${esc(track.source_url)}" target="_blank" rel="noopener" style="color:var(--text-dim);font-size:10px" onclick="event.stopPropagation()">↗</a>` : ""}
       </div>
       ${hasSegs ? `<div class="seg-sub-row" style="display:none">${track.segments.map(s => `
         <div class="seg-extract-item">
           <span class="seg-extract-name">${esc(s.name)}</span>
-          <span class="seg-extract-times">${fmt(s.start)} – ${fmt(s.end)}</span>
-          <button class="seg-extract-mix" data-seg-name="${esc(s.name)}">+ Mix</button>
+          <span class="seg-extract-times">${fmt(s.start)}–${fmt(s.end)}</span>
+          <button class="seg-extract-add" data-zone="bed"   data-seg-name="${esc(s.name)}">Bed</button>
+          <button class="seg-extract-add" data-zone="queue" data-seg-name="${esc(s.name)}">Queue</button>
         </div>`).join("")}</div>` : ""}
     </div>
     <div class="card-actions">
-      <button data-action="play" title="Add whole track to mixer">▶ Mix</button>
-      <button data-action="edit" title="Edit metadata">✎ Edit</button>
+      <button data-action="bed"   title="Add to Beds (loops)">→ Bed</button>
+      <button data-action="queue" title="Add to Queue (sequence)">→ Queue</button>
+      <button data-action="edit"  title="Edit metadata">✎</button>
       <button data-action="delete" class="danger" title="Delete">✕</button>
     </div>
   `;
 
-  // Segment toggle
+  // Segment sub-row toggle
   const toggleBtn = card.querySelector(".seg-toggle-btn");
-  const subRow = card.querySelector(".seg-sub-row");
+  const subRow    = card.querySelector(".seg-sub-row");
   if (toggleBtn && subRow) {
     toggleBtn.addEventListener("click", e => {
       e.stopPropagation();
@@ -217,33 +216,29 @@ function makeCard(track) {
     });
   }
 
-  // Add segment to mixer
-  card.querySelectorAll(".seg-extract-mix").forEach(btn => {
+  // Segment → Bed / Queue
+  card.querySelectorAll(".seg-extract-add").forEach(btn => {
     btn.addEventListener("click", e => {
       e.stopPropagation();
       const seg = track.segments.find(s => s.name === btn.dataset.segName);
-      if (seg) { addToMixer(track, seg); switchView("mixer"); }
+      if (seg) { addToMixer(track, seg, btn.dataset.zone); switchView("mixer"); }
     });
   });
 
-  // Add whole track to mixer
-  card.querySelector("[data-action=play]").addEventListener("click", e => {
-    e.stopPropagation();
-    addToMixer(track);
-    switchView("mixer");
+  card.querySelector("[data-action=bed]").addEventListener("click", e => {
+    e.stopPropagation(); addToMixer(track, null, "bed"); switchView("mixer");
   });
-
+  card.querySelector("[data-action=queue]").addEventListener("click", e => {
+    e.stopPropagation(); addToMixer(track, null, "queue"); switchView("mixer");
+  });
   card.querySelector("[data-action=edit]").addEventListener("click", e => {
-    e.stopPropagation();
-    openTrackModal(track);
+    e.stopPropagation(); openTrackModal(track);
   });
-
   card.querySelector("[data-action=delete]").addEventListener("click", async e => {
     e.stopPropagation();
-    if (!confirm(`Delete "${track.title}"?`)) return;
+    if (!confirm(`Delete "${displayName(track)}"?`)) return;
     try {
       await api("DELETE", `/tracks/${track.id}`);
-      // Remove any mixer slots for this track
       for (const [sid, node] of activeTracks) {
         if (node.meta.id === track.id) removeFromMixer(sid);
       }
@@ -255,63 +250,66 @@ function makeCard(track) {
   return card;
 }
 
-document.querySelectorAll(".lib-tab").forEach(btn => {
+document.querySelectorAll(".lib-tab").forEach(btn =>
   btn.addEventListener("click", () => {
     libTab = btn.dataset.tab;
     document.querySelectorAll(".lib-tab").forEach(b => b.classList.toggle("active", b === btn));
     renderLibrary();
-  });
-});
+  }));
 
 document.getElementById("lib-sort").addEventListener("change", e => {
-  libSort = e.target.value;
-  renderLibrary();
+  libSort = e.target.value; renderLibrary();
 });
 
 // ---------------------------------------------------------------------------
-// Mixer — core
+// Mixer — add / remove
 // ---------------------------------------------------------------------------
 
-function addToMixer(track, segment = null) {
+function addToMixer(track, segment = null, zone = "bed") {
   resumeCtx();
   const slotId = slotIdFor(track.id, segment?.name);
-
   if (activeTracks.has(slotId)) { toast("Already in mixer"); return; }
 
-  const audioEl = new Audio(`/api/tracks/${track.id}/audio`);
+  const audioEl    = new Audio(`/api/tracks/${track.id}/audio`);
   audioEl.crossOrigin = "anonymous";
   const sourceNode = audioCtx.createMediaElementSource(audioEl);
-  const gainNode = audioCtx.createGain();
+  const gainNode   = audioCtx.createGain();
   gainNode.gain.value = 0.8;
   sourceNode.connect(gainNode);
   gainNode.connect(masterGain);
 
   const node = {
-    meta: track,
-    segment,             // {name, start, end} or null
-    audioEl,
-    sourceNode,
-    gainNode,
-    playMode: "loop",
+    meta: track, segment, zone,
+    audioEl, sourceNode, gainNode,
     _targetVolume: 0.8,
     sessionStart: isoNow(),
+    _timeUpdateHandler: null,
   };
 
-  if (segment) {
-    audioEl.currentTime = segment.start;
-    audioEl.loop = false;
+  if (zone === "bed") {
+    audioEl.loop = !segment;
+    audioEl.currentTime = segment?.start || 0;
+    if (!globalPaused) audioEl.play().catch(() => {});
+    globalPaused = false;
   } else {
-    audioEl.loop = true;
+    // Queue: play immediately only if first item; otherwise queue it
+    audioEl.loop = false;
+    audioEl.currentTime = segment?.start || 0;
+    const isFirst = sequenceOrder.length === 0;
+    sequenceOrder.push(slotId);
+    if (isFirst && !globalPaused || isFirst && activeTracks.size === 0) {
+      currentQueueIdx = 0;
+      globalPaused = false;
+      audioEl.play().catch(() => {});
+    }
   }
 
   activeTracks.set(slotId, node);
   attachHandlers(slotId, node);
-  if (!globalPaused) audioEl.play().catch(() => {});
-  else audioEl.pause();
-  globalPaused = false;    // adding a track implicitly starts playback
   renderMixerTrack(slotId);
-  renderMixerEmpty();
+  updateZoneEmpty();
   updateTransportLabel();
+  if (zone === "queue") updateQueueHighlight();
 }
 
 function removeFromMixer(slotId) {
@@ -332,42 +330,54 @@ function removeFromMixer(slotId) {
   }
   node.gainNode.disconnect();
   activeTracks.delete(slotId);
-  sequenceOrder = sequenceOrder.filter(id => id !== slotId);
-  updateSequenceBadges();
+
+  if (node.zone === "queue") {
+    const idx = sequenceOrder.indexOf(slotId);
+    sequenceOrder = sequenceOrder.filter(id => id !== slotId);
+    if (idx === currentQueueIdx) {
+      // Was the active item — advance to next if possible
+      if (sequenceOrder.length > 0) {
+        currentQueueIdx = Math.min(idx, sequenceOrder.length - 1);
+        if (!globalPaused) playQueueItem(currentQueueIdx);
+      } else {
+        currentQueueIdx = -1;
+      }
+    } else if (idx < currentQueueIdx) {
+      currentQueueIdx--;
+    }
+  }
 
   const el = document.getElementById("mtrack-" + slotId);
   if (el) el.remove();
-  renderMixerEmpty();
+  updateZoneEmpty();
   updateTransportLabel();
+  updateQueueHighlight();
 }
 
 // ---------------------------------------------------------------------------
-// Mixer — event handlers per node
+// Mixer — handlers per node
 // ---------------------------------------------------------------------------
 
 function attachHandlers(slotId, node) {
   const handler = () => {
     updateSeekDisplay(slotId, node);
 
-    // Enforce segment bounds
     const seg = node.segment;
     if (seg && node.audioEl.currentTime >= seg.end) {
-      if (node.playMode === "loop") {
-        node.audioEl.currentTime = seg.start;
+      if (node.zone === "bed") {
+        node.audioEl.currentTime = seg.start;    // loop segment in bed
       } else {
         node.audioEl.pause();
-        advanceSequence(slotId);
+        advanceQueue(slotId);
       }
     }
   };
   node.audioEl.addEventListener("timeupdate", handler);
   node._timeUpdateHandler = handler;
 
-  // Non-segmented sequence tracks advance on natural end
+  // Non-segmented queue tracks advance on natural end
   node.audioEl.addEventListener("ended", () => {
-    if (node.playMode === "sequence" && !node.segment) {
-      advanceSequence(slotId);
-    }
+    if (node.zone === "queue" && !node.segment) advanceQueue(slotId);
   });
 }
 
@@ -376,16 +386,14 @@ function updateSeekDisplay(slotId, node) {
   if (!el || !node.audioEl.duration) return;
   const slider = el.querySelector(".seek-slider");
   const timeEl = el.querySelector(".time-display");
-  if (!slider || slider.dataset.seeking === "1") return;  // user is dragging
+  if (!slider || slider.dataset.seeking === "1") return;
 
-  const cur = node.audioEl.currentTime;
-  slider.value = (cur / node.audioEl.duration) * 1000;
-
+  slider.value = (node.audioEl.currentTime / node.audioEl.duration) * 1000;
   if (timeEl) {
-    const seg = node.segment;
-    const display = seg ? Math.max(0, cur - seg.start) : cur;
-    const total   = seg ? seg.end - seg.start : node.audioEl.duration;
-    timeEl.textContent = `${fmt(display)} / ${fmt(total)}`;
+    const seg   = node.segment;
+    const cur   = seg ? Math.max(0, node.audioEl.currentTime - seg.start) : node.audioEl.currentTime;
+    const total = seg ? seg.end - seg.start : node.audioEl.duration;
+    timeEl.textContent = `${fmt(cur)} / ${fmt(total)}`;
   }
 }
 
@@ -396,23 +404,25 @@ function updateSeekDisplay(slotId, node) {
 function renderMixerTrack(slotId) {
   const node = activeTracks.get(slotId);
   if (!node) return;
-  const { meta, segment } = node;
+  const { meta, segment, zone } = node;
 
-  const container = document.getElementById("mixer-tracks");
+  const container = document.getElementById(zone === "bed" ? "beds-tracks" : "queue-tracks");
   const div = document.createElement("div");
   div.className = "mixer-track";
   div.id = "mtrack-" + slotId;
+  if (zone === "queue") div.setAttribute("draggable", "true");
 
   const thumbUrl = meta.thumbnail ? `/api/tracks/${meta.id}/thumbnail` : null;
 
   div.innerHTML = `
+    ${zone === "queue" ? `<div class="drag-handle" title="Drag to reorder">⠿</div>` : ""}
     ${thumbUrl
       ? `<img class="thumb" src="${thumbUrl}" alt="">`
       : `<div class="thumb-placeholder">♫</div>`}
     <div class="mixer-track-info">
       <div class="slot-name" contenteditable="true" spellcheck="false"
            data-placeholder="${esc(segment ? segment.name : displayName(meta))}"
-           title="Click to rename this mixer slot"></div>
+           title="Click to rename this slot"></div>
       <div class="slot-origin">
         ${esc(displayName(meta))}${meta.source_channel && !meta.custom_label ? ` · ${esc(meta.source_channel)}` : ""}
         ${segment ? ` <span class="seg-label">◈ ${esc(segment.name)}</span>` : ""}
@@ -422,73 +432,73 @@ function renderMixerTrack(slotId) {
         <input type="range" class="seek-slider" min="0" max="1000" value="0">
       </div>
       <div class="mixer-track-row">
-        <button class="play-btn" data-playing="true" title="Pause">⏸</button>
+        <button class="play-btn" data-playing="true" title="Play / Pause">⏸</button>
         <input type="range" class="vol-slider" min="0" max="1" step="0.01" value="0.8" title="Volume">
-        <button class="toggle-btn on" data-loop="true" title="Loop">🔁</button>
-        <button class="mode-btn toggle-btn" title="Play mode: Loop">Loop</button>
+        ${zone === "bed"
+          ? `<button class="toggle-btn on" data-loop="true" title="Loop">🔁</button>`
+          : `<span class="queue-num"></span>`}
         <button class="toggle-btn" data-action="edit-segs" title="Edit segments">✎</button>
-        <button class="toggle-btn" data-action="remove" style="margin-left:auto">✕</button>
+        <button class="toggle-btn" data-action="remove" style="margin-left:auto" title="Remove">✕</button>
       </div>
     </div>
   `;
 
-  // Contenteditable slot name: show placeholder when empty, grey out origin when custom name set
-  const slotNameEl = div.querySelector(".slot-name");
-  const slotOriginEl = div.querySelector(".slot-origin");
-
-  function syncSlotName() {
-    const val = slotNameEl.textContent.trim();
-    node.displayName = val || null;
-    slotOriginEl.classList.toggle("origin-dimmed", !!val);
-    slotNameEl.classList.toggle("empty", !val);
-  }
-  slotNameEl.addEventListener("input",  syncSlotName);
-  slotNameEl.addEventListener("blur",   () => { if (!slotNameEl.textContent.trim()) slotNameEl.textContent = ""; syncSlotName(); });
-  slotNameEl.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); slotNameEl.blur(); } });
-  syncSlotName();
-
-  // Render segment bar if whole track with segments
-  if (!segment && meta.segments?.length && meta.duration_seconds) {
-    const segBar = document.createElement("div");
-    segBar.className = "segment-bar";
-    segBar.style.marginTop = "6px";
+  // Segment bar (whole-track beds only)
+  if (zone === "bed" && !segment && meta.segments?.length && meta.duration_seconds) {
+    const bar = document.createElement("div");
+    bar.className = "segment-bar";
+    bar.style.marginTop = "6px";
     meta.segments.forEach(s => {
       const left  = (s.start / meta.duration_seconds * 100).toFixed(2);
       const width = ((s.end - s.start) / meta.duration_seconds * 100).toFixed(2);
       const chip  = document.createElement("div");
       chip.className = "seg-chip";
       chip.style.cssText = `left:${left}%;width:${width}%`;
-      chip.title = s.name;
-      chip.textContent = s.name;
-      chip.dataset.segName = s.name;
+      chip.title = s.name; chip.textContent = s.name; chip.dataset.segName = s.name;
       chip.addEventListener("click", () => jumpToSegment(slotId, s, chip));
-      segBar.appendChild(chip);
+      bar.appendChild(chip);
     });
-    div.querySelector(".mixer-track-info").appendChild(segBar);
+    div.querySelector(".mixer-track-info").appendChild(bar);
   }
+
+  // — Slot name (contenteditable)
+  const slotNameEl   = div.querySelector(".slot-name");
+  const slotOriginEl = div.querySelector(".slot-origin");
+  const syncSlotName = () => {
+    const val = slotNameEl.textContent.trim();
+    node.displayName = val || null;
+    slotOriginEl.classList.toggle("origin-dimmed", !!val);
+    slotNameEl.classList.toggle("empty", !val);
+  };
+  slotNameEl.addEventListener("input",   syncSlotName);
+  slotNameEl.addEventListener("blur",    () => { if (!slotNameEl.textContent.trim()) slotNameEl.textContent = ""; syncSlotName(); });
+  slotNameEl.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); slotNameEl.blur(); } });
+  syncSlotName();
 
   // — Play / Pause
   const playBtn = div.querySelector(".play-btn");
   playBtn.addEventListener("click", () => {
+    if (zone === "queue") {
+      const myIdx = sequenceOrder.indexOf(slotId);
+      if (myIdx !== currentQueueIdx) {
+        // Jump to this queue item
+        jumpToQueueItem(myIdx);
+        return;
+      }
+    }
     const playing = playBtn.dataset.playing === "true";
     if (playing) {
       node.audioEl.pause();
-      playBtn.dataset.playing = "false";
-      playBtn.textContent = "▶";
-      playBtn.classList.add("paused");
+      playBtn.dataset.playing = "false"; playBtn.textContent = "▶"; playBtn.classList.add("paused");
     } else {
-      resumeCtx();
-      node.audioEl.play().catch(() => {});
-      playBtn.dataset.playing = "true";
-      playBtn.textContent = "⏸";
-      playBtn.classList.remove("paused");
+      resumeCtx(); node.audioEl.play().catch(() => {});
+      playBtn.dataset.playing = "true"; playBtn.textContent = "⏸"; playBtn.classList.remove("paused");
     }
   });
 
-  // — Seek: update display while dragging, only seek on release
+  // — Seek (display while dragging, seek on release)
   const seekSlider = div.querySelector(".seek-slider");
-  const timeEl = div.querySelector(".time-display");
-
+  const timeEl     = div.querySelector(".time-display");
   seekSlider.addEventListener("input", () => {
     seekSlider.dataset.seeking = "1";
     const pct = parseFloat(seekSlider.value) / 1000;
@@ -496,7 +506,6 @@ function renderMixerTrack(slotId) {
     const dur = seg ? seg.end - seg.start : (node.audioEl.duration || 0);
     if (timeEl) timeEl.textContent = `${fmt(pct * dur)} / ${fmt(dur)}`;
   });
-
   seekSlider.addEventListener("change", () => {
     seekSlider.dataset.seeking = "";
     if (!node.audioEl.duration) return;
@@ -513,50 +522,31 @@ function renderMixerTrack(slotId) {
     node._targetVolume = parseFloat(volSlider.value);
   });
 
-  // — Loop (for whole-track non-segment mode)
-  const loopBtn = div.querySelector("[data-loop]");
-  loopBtn.addEventListener("click", () => {
-    if (node.playMode !== "loop") return; // loop toggle only relevant in loop mode
-    const looping = loopBtn.dataset.loop === "true";
-    const nextLoop = !looping;
-    node.audioEl.loop = nextLoop && !node.segment;
-    loopBtn.dataset.loop = String(nextLoop);
-    loopBtn.classList.toggle("on", nextLoop);
-  });
-
-  // — Play mode (Loop ↔ Sequence)
-  const modeBtn = div.querySelector(".mode-btn");
-  modeBtn.addEventListener("click", () => {
-    const next = node.playMode === "loop" ? "sequence" : "loop";
-    setPlayMode(slotId, next);
-    modeBtn.textContent = next === "loop" ? "Loop" : "Seq";
-    modeBtn.classList.toggle("on", next === "sequence");
-    // sync loop button visibility
-    loopBtn.style.display = next === "loop" ? "" : "none";
-  });
-
-  // — Segment jump chips (whole-track)
-  div.querySelectorAll(".seg-chip").forEach(chip => {
-    chip.addEventListener("click", () => {
-      const s = meta.segments?.find(x => x.name === chip.dataset.segName);
-      if (s) jumpToSegment(slotId, s, chip);
+  // — Loop (bed only)
+  if (zone === "bed") {
+    const loopBtn = div.querySelector("[data-loop]");
+    loopBtn?.addEventListener("click", () => {
+      const looping = loopBtn.dataset.loop === "true";
+      const next = !looping;
+      node.audioEl.loop = next && !node.segment;
+      loopBtn.dataset.loop = String(next);
+      loopBtn.classList.toggle("on", next);
     });
+  }
+
+  // — Segment chips (bed, whole track)
+  div.querySelectorAll(".seg-chip").forEach(chip => {
+    const s = meta.segments?.find(x => x.name === chip.dataset.segName);
+    if (s) chip.addEventListener("click", () => jumpToSegment(slotId, s, chip));
   });
 
   // — Edit segments
-  div.querySelector("[data-action=edit-segs]").addEventListener("click", () => {
-    openTrackModal(meta);
-  });
+  div.querySelector("[data-action=edit-segs]").addEventListener("click", () => openTrackModal(meta));
 
   // — Remove
   div.querySelector("[data-action=remove]").addEventListener("click", () => removeFromMixer(slotId));
 
   container.appendChild(div);
-}
-
-function renderMixerEmpty() {
-  const empty = document.getElementById("mixer-empty");
-  if (empty) empty.style.display = activeTracks.size === 0 ? "flex" : "none";
 }
 
 function jumpToSegment(slotId, seg, chip) {
@@ -565,23 +555,156 @@ function jumpToSegment(slotId, seg, chip) {
   document.querySelectorAll(`#mtrack-${slotId} .seg-chip`).forEach(c => c.classList.remove("active"));
   chip.classList.add("active");
   node.audioEl.currentTime = seg.start;
-  node._activeSegStart = seg.start;
-  node._activeSegEnd   = seg.end;
 }
 
-// Master volume
-document.getElementById("master-vol").addEventListener("input", e => {
-  masterGain.gain.value = parseFloat(e.target.value);
+function updateZoneEmpty() {
+  const hasBeds  = [...activeTracks.values()].some(n => n.zone === "bed");
+  const hasQueue = [...activeTracks.values()].some(n => n.zone === "queue");
+  document.getElementById("beds-empty").style.display  = hasBeds  ? "none" : "block";
+  document.getElementById("queue-empty").style.display = hasQueue ? "none" : "block";
+}
+
+// ---------------------------------------------------------------------------
+// Queue management
+// ---------------------------------------------------------------------------
+
+function playQueueItem(idx) {
+  if (idx < 0 || idx >= sequenceOrder.length) return;
+  currentQueueIdx = idx;
+  const node = activeTracks.get(sequenceOrder[idx]);
+  if (!node) return;
+  node.audioEl.currentTime = node.segment?.start || 0;
+  node.audioEl.play().catch(() => {});
+  updateQueueHighlight();
+}
+
+function jumpToQueueItem(idx) {
+  const from = activeTracks.get(sequenceOrder[currentQueueIdx]);
+  const to   = activeTracks.get(sequenceOrder[idx]);
+  if (!to) return;
+  to.audioEl.currentTime = to.segment?.start || 0;
+  to.audioEl.play().catch(() => {});
+  if (from && from !== to) crossfadeNodes(from, to, CROSSFADE_S);
+  currentQueueIdx = idx;
+  updateQueueHighlight();
+}
+
+function advanceQueue(finishedSlotId) {
+  const idx = sequenceOrder.indexOf(finishedSlotId);
+  if (idx < 0 || idx !== currentQueueIdx) return;
+
+  let nextIdx = idx + 1;
+  if (nextIdx >= sequenceOrder.length) {
+    if (!queueLooping) { currentQueueIdx = -1; updateQueueHighlight(); return; }
+    nextIdx = 0;
+  }
+
+  const from     = activeTracks.get(finishedSlotId);
+  const toSlotId = sequenceOrder[nextIdx];
+  const to       = activeTracks.get(toSlotId);
+  if (!to) return;
+
+  to.audioEl.currentTime = to.segment?.start || 0;
+  to.audioEl.play().catch(() => {});
+  crossfadeNodes(from, to, CROSSFADE_S);
+  currentQueueIdx = nextIdx;
+  updateQueueHighlight();
+}
+
+function crossfadeNodes(from, to, dur) {
+  const now = audioCtx.currentTime;
+  if (from) {
+    from.gainNode.gain.cancelScheduledValues(now);
+    from.gainNode.gain.setValueAtTime(from.gainNode.gain.value, now);
+    from.gainNode.gain.exponentialRampToValueAtTime(0.001, now + dur);
+    from.gainNode.gain.setValueAtTime(0, now + dur);
+  }
+  const toVol = to._targetVolume || 0.8;
+  to.gainNode.gain.cancelScheduledValues(now);
+  to.gainNode.gain.setValueAtTime(0.001, now);
+  to.gainNode.gain.exponentialRampToValueAtTime(toVol, now + dur);
+}
+
+function updateQueueHighlight() {
+  document.querySelectorAll("#queue-tracks .mixer-track").forEach((el, i) => {
+    const slotId   = el.id.replace("mtrack-", "");
+    const isActive = sequenceOrder.indexOf(slotId) === currentQueueIdx && currentQueueIdx >= 0;
+    el.classList.toggle("queue-active", isActive);
+
+    const pb = el.querySelector(".play-btn");
+    if (pb) {
+      const playing = isActive && !globalPaused;
+      pb.textContent = playing ? "⏸" : "▶";
+      pb.dataset.playing = String(playing);
+      pb.classList.toggle("paused", !playing);
+      pb.title = isActive ? "Play / Pause" : "Jump to this track";
+    }
+
+    const badge = el.querySelector(".queue-num");
+    if (badge) badge.textContent = `#${i + 1}`;
+  });
+}
+
+// Drag-to-reorder queue
+function initQueueDrag() {
+  const container = document.getElementById("queue-tracks");
+
+  container.addEventListener("dragstart", e => {
+    const item = e.target.closest(".mixer-track");
+    if (!item) return;
+    item.classList.add("dragging");
+    e.dataTransfer.setData("text/plain", item.id);
+    e.dataTransfer.effectAllowed = "move";
+  });
+
+  container.addEventListener("dragend", () => {
+    document.querySelectorAll(".mixer-track.dragging").forEach(el => el.classList.remove("dragging"));
+    // Rebuild sequenceOrder from DOM
+    const newOrder = [...container.querySelectorAll(".mixer-track")]
+      .map(el => el.id.replace("mtrack-", ""));
+    // Keep currentQueueIdx pointing at the same track
+    const activeSlotId = sequenceOrder[currentQueueIdx];
+    sequenceOrder = newOrder;
+    currentQueueIdx = activeSlotId ? sequenceOrder.indexOf(activeSlotId) : -1;
+    updateQueueHighlight();
+  });
+
+  container.addEventListener("dragover", e => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    const dragging = container.querySelector(".dragging");
+    if (!dragging) return;
+    const target = e.target.closest(".mixer-track:not(.dragging)");
+    if (!target) return;
+    const rect = target.getBoundingClientRect();
+    if (e.clientY < rect.top + rect.height / 2) {
+      container.insertBefore(dragging, target);
+    } else {
+      target.insertAdjacentElement("afterend", dragging);
+    }
+  });
+
+  container.addEventListener("drop", e => e.preventDefault());
+}
+
+// Queue loop toggle
+document.getElementById("queue-loop-btn").addEventListener("click", () => {
+  queueLooping = !queueLooping;
+  document.getElementById("queue-loop-btn").classList.toggle("on", queueLooping);
 });
 
 // ---------------------------------------------------------------------------
-// Transport (global play/pause — always in header)
+// Transport
 // ---------------------------------------------------------------------------
 
 function updateTransportLabel() {
-  const n = activeTracks.size;
+  const beds  = [...activeTracks.values()].filter(n => n.zone === "bed").length;
+  const queue = sequenceOrder.length;
+  const parts = [];
+  if (beds)  parts.push(`${beds} bed${beds > 1 ? "s" : ""}`);
+  if (queue) parts.push(`${queue} queued`);
   const el = document.getElementById("transport-label");
-  if (el) el.textContent = n === 0 ? "No tracks" : `${n} track${n > 1 ? "s" : ""}`;
+  if (el) el.textContent = parts.length ? parts.join(", ") : "No tracks";
   const btn = document.getElementById("transport-play");
   if (btn) btn.textContent = globalPaused ? "▶" : "⏸";
 }
@@ -592,14 +715,10 @@ function toggleGlobalPlayback() {
   globalPaused = !globalPaused;
 
   for (const [slotId, node] of activeTracks) {
-    if (globalPaused) {
-      node.audioEl.pause();
-    } else {
-      node.audioEl.play().catch(() => {});
-    }
-    const el = document.getElementById("mtrack-" + slotId);
-    if (el) {
-      const pb = el.querySelector(".play-btn");
+    if (node.zone === "bed") {
+      globalPaused ? node.audioEl.pause() : node.audioEl.play().catch(() => {});
+      const el = document.getElementById("mtrack-" + slotId);
+      const pb = el?.querySelector(".play-btn");
       if (pb) {
         pb.dataset.playing = String(!globalPaused);
         pb.textContent = globalPaused ? "▶" : "⏸";
@@ -607,26 +726,33 @@ function toggleGlobalPlayback() {
       }
     }
   }
+
+  // Queue: only the active item
+  if (currentQueueIdx >= 0 && currentQueueIdx < sequenceOrder.length) {
+    const activeNode = activeTracks.get(sequenceOrder[currentQueueIdx]);
+    if (activeNode) {
+      globalPaused ? activeNode.audioEl.pause() : activeNode.audioEl.play().catch(() => {});
+    }
+  }
+
+  updateQueueHighlight();
   updateTransportLabel();
 }
 
 document.getElementById("transport-play").addEventListener("click", toggleGlobalPlayback);
 
+document.getElementById("master-vol").addEventListener("input", e => {
+  masterGain.gain.value = parseFloat(e.target.value);
+});
+
 document.addEventListener("keydown", e => {
   const mediaKeys = ["MediaPlayPause", "MediaPlay", "MediaPause", "MediaStop"];
-
   if (mediaKeys.includes(e.code)) {
-    // Media keys always work regardless of focus
     e.preventDefault();
-    if (e.code === "MediaStop") {
-      // Stop = pause all (don't toggle)
-      if (!globalPaused) toggleGlobalPlayback();
-    } else {
-      toggleGlobalPlayback();
-    }
+    if (e.code === "MediaStop") { if (!globalPaused) toggleGlobalPlayback(); }
+    else toggleGlobalPlayback();
     return;
   }
-
   if (e.code === "Space") {
     const tag = document.activeElement?.tagName;
     if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" ||
@@ -635,82 +761,6 @@ document.addEventListener("keydown", e => {
     toggleGlobalPlayback();
   }
 });
-
-// ---------------------------------------------------------------------------
-// Sequential playback
-// ---------------------------------------------------------------------------
-
-function setPlayMode(slotId, mode) {
-  const node = activeTracks.get(slotId);
-  if (!node) return;
-  node.playMode = mode;
-
-  if (mode === "loop") {
-    if (!node.segment) node.audioEl.loop = true;
-    sequenceOrder = sequenceOrder.filter(id => id !== slotId);
-  } else {
-    node.audioEl.loop = false;
-    if (!sequenceOrder.includes(slotId)) sequenceOrder.push(slotId);
-  }
-  updateSequenceBadges();
-}
-
-function advanceSequence(finishedSlotId) {
-  const idx = sequenceOrder.indexOf(finishedSlotId);
-  if (idx < 0) return;
-
-  // Next in order, wrapping to start
-  const nextId = sequenceOrder[(idx + 1) % sequenceOrder.length];
-  if (!nextId || nextId === finishedSlotId) return;
-
-  const from = activeTracks.get(finishedSlotId);
-  const to   = activeTracks.get(nextId);
-  if (!to) return;
-
-  // Rewind the incoming track to its start
-  to.audioEl.currentTime = to.segment ? to.segment.start : 0;
-  to.audioEl.play().catch(() => {});
-
-  crossfadeNodes(from, to, CROSSFADE_S);
-
-  // Update play button state on incoming track
-  const toEl = document.getElementById("mtrack-" + nextId);
-  if (toEl) {
-    const btn = toEl.querySelector(".play-btn");
-    if (btn) { btn.dataset.playing = "true"; btn.textContent = "⏸"; btn.classList.remove("paused"); }
-  }
-}
-
-// Exponential-out fade (sounds more natural than linear)
-function crossfadeNodes(from, to, dur) {
-  const now = audioCtx.currentTime;
-
-  if (from) {
-    const fromVol = from.gainNode.gain.value;
-    from.gainNode.gain.cancelScheduledValues(now);
-    from.gainNode.gain.setValueAtTime(fromVol, now);
-    from.gainNode.gain.exponentialRampToValueAtTime(0.001, now + dur);
-    // Silence after fade to avoid floating point click
-    from.gainNode.gain.setValueAtTime(0, now + dur);
-  }
-
-  const toVol = to._targetVolume || 0.8;
-  to.gainNode.gain.cancelScheduledValues(now);
-  to.gainNode.gain.setValueAtTime(0.001, now);
-  to.gainNode.gain.exponentialRampToValueAtTime(toVol, now + dur);
-}
-
-function updateSequenceBadges() {
-  document.querySelectorAll(".seq-badge").forEach(el => el.remove());
-  sequenceOrder.forEach((id, idx) => {
-    const el = document.getElementById("mtrack-" + id);
-    if (!el) return;
-    const badge = document.createElement("span");
-    badge.className = "seq-badge";
-    badge.textContent = `#${idx + 1}`;
-    el.querySelector(".title").insertAdjacentElement("afterend", badge);
-  });
-}
 
 // ---------------------------------------------------------------------------
 // Presets
@@ -729,34 +779,25 @@ document.getElementById("preset-select").addEventListener("change", async e => {
   const preset = presets.find(p => p.name === name);
   if (!preset) return;
 
-  // Clear current mixer
   [...activeTracks.keys()].forEach(removeFromMixer);
 
   for (const entry of preset.tracks) {
     const track = library.find(t => t.id === entry.track_id);
     if (!track) continue;
-
-    // Restore segment if stored
     let segment = entry.segment || null;
     if (!segment && entry.active_segment) {
       segment = track.segments?.find(s => s.name === entry.active_segment) || null;
     }
-
-    addToMixer(track, segment);
+    // Support both new 'zone' field and legacy 'play_mode'
+    const zone = entry.zone || (entry.play_mode === "sequence" ? "queue" : "bed");
+    addToMixer(track, segment, zone);
     const slotId = slotIdFor(track.id, segment?.name);
     const node = activeTracks.get(slotId);
     if (!node) continue;
-
     node.gainNode.gain.value = entry.volume ?? 0.8;
     node._targetVolume = entry.volume ?? 0.8;
-    const volSlider = document.querySelector(`#mtrack-${slotId} .vol-slider`);
-    if (volSlider) volSlider.value = entry.volume ?? 0.8;
-
-    if (entry.play_mode === "sequence") {
-      setPlayMode(slotId, "sequence");
-      const modeBtn = document.querySelector(`#mtrack-${slotId} .mode-btn`);
-      if (modeBtn) { modeBtn.textContent = "Seq"; modeBtn.classList.add("on"); }
-    }
+    const vs = document.querySelector(`#mtrack-${slotId} .vol-slider`);
+    if (vs) vs.value = entry.volume ?? 0.8;
   }
 
   e.target.value = "";
@@ -771,9 +812,9 @@ document.getElementById("save-preset-btn").addEventListener("click", async () =>
   for (const [slotId, node] of activeTracks) {
     tracks.push({
       track_id: node.meta.id,
-      segment: node.segment || null,
-      volume: node._targetVolume || node.gainNode.gain.value,
-      play_mode: node.playMode || "loop",
+      segment:  node.segment || null,
+      volume:   node._targetVolume || node.gainNode.gain.value,
+      zone:     node.zone || "bed",
     });
   }
   try {
@@ -801,38 +842,27 @@ document.getElementById("delete-preset-btn").addEventListener("click", async () 
 
 function renderJobQueue() {
   const container = document.getElementById("job-queue");
-  const entries = Object.entries(activeJobs);
+  const entries   = Object.entries(activeJobs);
   container.innerHTML = "";
-
   if (!entries.length) { container.style.display = "none"; return; }
   container.style.display = "flex";
-
   for (const [id, job] of entries) {
     const item = document.createElement("div");
     item.className = `job-item job-${job.status}`;
-    const icon = { queued: "⏳", running: "⬇", done: "✓", error: "✗" }[job.status] || "?";
+    const icon  = { queued:"⏳", running:"⬇", done:"✓", error:"✗" }[job.status] || "?";
     const label = job.track?.title || job.url;
     item.innerHTML = `
       <span class="job-icon">${icon}</span>
-      <span class="job-label">${esc(label.length > 48 ? label.slice(0, 45) + "…" : label)}</span>
+      ${job.status === "running" ? `<span class="spinner"></span>` : ""}
+      <span class="job-label">${esc(label.length > 48 ? label.slice(0,45)+"…" : label)}</span>
       ${(job.status === "done" || job.status === "error")
         ? `<button class="job-dismiss" data-jid="${id}">✕</button>` : ""}
     `;
-    if (job.status === "running") {
-      const spin = document.createElement("span");
-      spin.className = "spinner";
-      item.insertBefore(spin, item.querySelector(".job-label"));
-      item.querySelector(".job-icon").remove();
-    }
+    if (job.status === "running") item.querySelector(".job-icon").remove();
     container.appendChild(item);
   }
-
-  container.querySelectorAll(".job-dismiss").forEach(btn => {
-    btn.addEventListener("click", () => {
-      delete activeJobs[btn.dataset.jid];
-      renderJobQueue();
-    });
-  });
+  container.querySelectorAll(".job-dismiss").forEach(btn =>
+    btn.addEventListener("click", () => { delete activeJobs[btn.dataset.jid]; renderJobQueue(); }));
 }
 
 function startPolling() {
@@ -840,25 +870,20 @@ function startPolling() {
   pollTimer = setInterval(async () => {
     const pending = Object.values(activeJobs).filter(j => j.status === "queued" || j.status === "running");
     if (!pending.length) { clearInterval(pollTimer); pollTimer = null; return; }
-
     try {
       const jobs = await api("GET", "/jobs");
-      let anyNew = false;
       for (const [id, job] of Object.entries(jobs)) {
         if (!activeJobs[id]) continue;
         const prev = activeJobs[id].status;
         activeJobs[id] = job;
         if (job.status === "done" && prev !== "done") {
-          library.push(job.track);
-          renderLibrary();
-          toast(`Downloaded: ${job.track.title}`);
-          anyNew = true;
+          library.push(job.track); renderLibrary(); toast(`Downloaded: ${job.track.title}`);
         } else if (job.status === "error" && prev !== "error") {
-          toast(`Download failed: ${job.url}`, true);
+          toast(`Download failed`, true);
         }
       }
       renderJobQueue();
-    } catch { /* network blip — try again next tick */ }
+    } catch { /* network blip */ }
   }, 3000);
 }
 
@@ -866,13 +891,9 @@ async function submitDownload(url) {
   try {
     const res = await api("POST", "/download", { url });
     activeJobs[res.job_id] = { status: "queued", url };
-    renderJobQueue();
-    startPolling();
+    renderJobQueue(); startPolling();
     return true;
-  } catch (err) {
-    toast(err.message, true);
-    return false;
-  }
+  } catch (err) { toast(err.message, true); return false; }
 }
 
 // ---------------------------------------------------------------------------
@@ -880,41 +901,29 @@ async function submitDownload(url) {
 // ---------------------------------------------------------------------------
 
 const addModal = document.getElementById("add-modal");
+document.getElementById("add-track-btn").addEventListener("click",       () => addModal.classList.remove("hidden"));
+document.getElementById("add-modal-close").addEventListener("click",     () => addModal.classList.add("hidden"));
+addModal.addEventListener("click", e => { if (e.target === addModal) addModal.classList.add("hidden"); });
 
-document.getElementById("add-track-btn").addEventListener("click", () => {
-  addModal.classList.remove("hidden");
-});
-document.getElementById("add-modal-close").addEventListener("click", () => {
-  addModal.classList.add("hidden");
-});
-addModal.addEventListener("click", e => {
-  if (e.target === addModal) addModal.classList.add("hidden");
-});
-
-document.querySelectorAll(".modal-tab").forEach(btn => {
+document.querySelectorAll(".modal-tab").forEach(btn =>
   btn.addEventListener("click", () => {
     const panel = btn.dataset.panel;
     document.querySelectorAll(".modal-tab").forEach(b => b.classList.toggle("active", b === btn));
     document.querySelectorAll(".modal-panel").forEach(p => p.classList.toggle("active", p.id === panel));
     document.getElementById("download-btn").style.display =
       panel === "download-panel" ? "inline-flex" : "none";
-  });
-});
+  }));
 
-// Drop zone
 const dropZone = document.getElementById("drop-zone");
 const fileInput = document.getElementById("file-input");
-
-dropZone.addEventListener("click", () => fileInput.click());
-dropZone.addEventListener("dragover", e => { e.preventDefault(); dropZone.classList.add("over"); });
+dropZone.addEventListener("click",     () => fileInput.click());
+dropZone.addEventListener("dragover",  e => { e.preventDefault(); dropZone.classList.add("over"); });
 dropZone.addEventListener("dragleave", () => dropZone.classList.remove("over"));
 dropZone.addEventListener("drop", e => {
   e.preventDefault(); dropZone.classList.remove("over");
   if (e.dataTransfer.files.length) uploadFile(e.dataTransfer.files[0]);
 });
-fileInput.addEventListener("change", () => {
-  if (fileInput.files.length) uploadFile(fileInput.files[0]);
-});
+fileInput.addEventListener("change", () => { if (fileInput.files.length) uploadFile(fileInput.files[0]); });
 
 async function uploadFile(file) {
   const status = document.getElementById("upload-status");
@@ -925,15 +934,9 @@ async function uploadFile(file) {
     const r = await fetch("/api/upload", { method: "POST", body: form });
     if (!r.ok) throw new Error((await r.json()).error);
     const track = await r.json();
-    library.push(track);
-    renderLibrary();
-    status.textContent = `✓ ${track.title}`;
-    toast("Track uploaded");
-    fileInput.value = "";
-  } catch (err) {
-    status.textContent = "✗ " + err.message;
-    toast(err.message, true);
-  }
+    library.push(track); renderLibrary();
+    status.textContent = `✓ ${track.title}`; toast("Track uploaded"); fileInput.value = "";
+  } catch (err) { status.textContent = "✗ " + err.message; toast(err.message, true); }
 }
 
 document.getElementById("download-btn").addEventListener("click", async () => {
@@ -941,10 +944,7 @@ document.getElementById("download-btn").addEventListener("click", async () => {
   const url = input.value.trim();
   if (!url) return;
   const ok = await submitDownload(url);
-  if (ok) {
-    input.value = "";
-    document.getElementById("download-status").textContent = "Queued — track will appear in library when done.";
-  }
+  if (ok) { input.value = ""; document.getElementById("download-status").textContent = "Queued — track will appear in library when done."; }
 });
 
 // ---------------------------------------------------------------------------
@@ -956,25 +956,23 @@ let editingTrack = null;
 function openTrackModal(track) {
   editingTrack = { ...track, segments: [...(track.segments || [])] };
   document.getElementById("edit-custom-label").value = track.custom_label || "";
-  document.getElementById("edit-title").value        = track.title || "";
-  document.getElementById("edit-channel").value      = track.source_channel || "";
-  document.getElementById("edit-moods").value        = (track.mood_tags || []).join(", ");
-
-  // Grey out the original metadata block when a custom label is already set
+  document.getElementById("edit-title").value         = track.title || "";
+  document.getElementById("edit-channel").value       = track.source_channel || "";
+  document.getElementById("edit-moods").value         = (track.mood_tags || []).join(", ");
   syncOriginalsDim();
-  document.getElementById("edit-custom-label").addEventListener("input", syncOriginalsDim);
-
+  // Re-attach listener cleanly
+  const lbl = document.getElementById("edit-custom-label");
+  lbl.oninput = syncOriginalsDim;
   renderSegList(editingTrack.segments, track.duration_seconds);
   initDualRange(track.duration_seconds);
   document.getElementById("track-modal").classList.remove("hidden");
 }
 
 function syncOriginalsDim() {
-  const hasLabel = !!document.getElementById("edit-custom-label").value.trim();
-  document.getElementById("edit-originals").style.opacity = hasLabel ? "0.45" : "1";
+  const has = !!document.getElementById("edit-custom-label").value.trim();
+  document.getElementById("edit-originals").style.opacity = has ? "0.45" : "1";
 }
 
-// Dual-range slider for segment selection
 function initDualRange(duration) {
   const wrap     = document.getElementById("seg-timeline-wrap");
   const startR   = document.getElementById("dr-start");
@@ -986,51 +984,32 @@ function initDualRange(duration) {
   const endNum   = document.getElementById("seg-end");
   const startFmt = document.getElementById("seg-start-fmt");
   const endFmt   = document.getElementById("seg-end-fmt");
-
   if (!duration) { wrap.style.display = "none"; return; }
   wrap.style.display = "block";
-
-  startR.value = 0;
-  endR.value   = 1000;
-  startNum.value = 0;
-  endNum.value   = Math.round(duration);
+  startR.value = 0; endR.value = 1000;
+  startNum.value = 0; endNum.value = Math.round(duration);
   startNum.max = endNum.max = Math.round(duration);
-
-  function sliderToSecs(val) { return Math.round((val / 1000) * duration); }
-  function secsToSlider(s)   { return Math.round((s / duration) * 1000); }
-
-  function syncFromSlider() {
-    let s = parseInt(startR.value);
-    let e = parseInt(endR.value);
-    // Enforce s < e with a minimum gap
-    if (s >= e - 10) {
-      if (document.activeElement === startR) { s = e - 10; startR.value = s; }
-      else                                   { e = s + 10; endR.value = e; }
-    }
-    const sPct = s / 10; const ePct = e / 10;
-    fill.style.left  = sPct + "%";
-    fill.style.width = (ePct - sPct) + "%";
-    const sSec = sliderToSecs(s); const eSec = sliderToSecs(e);
-    startLbl.textContent = fmt(sSec); endLbl.textContent = fmt(eSec);
-    startNum.value = sSec; endNum.value = eSec;
-    startFmt.textContent = fmt(sSec); endFmt.textContent = fmt(eSec);
+  const toSecs = v => Math.round((v / 1000) * duration);
+  const toSlider = s => Math.round((s / duration) * 1000);
+  function sync() {
+    let s = parseInt(startR.value), e = parseInt(endR.value);
+    if (s >= e - 10) { if (document.activeElement === startR) { s = e - 10; startR.value = s; } else { e = s + 10; endR.value = e; } }
+    fill.style.left = (s / 10) + "%"; fill.style.width = ((e - s) / 10) + "%";
+    const ss = toSecs(s), es = toSecs(e);
+    startLbl.textContent = fmt(ss); endLbl.textContent = fmt(es);
+    startNum.value = ss; endNum.value = es;
+    if (startFmt) startFmt.textContent = fmt(ss);
+    if (endFmt)   endFmt.textContent   = fmt(es);
   }
-
-  function syncFromNumbers() {
-    let s = parseFloat(startNum.value) || 0;
-    let e = parseFloat(endNum.value)   || duration;
-    s = Math.max(0, Math.min(s, duration));
-    e = Math.max(0, Math.min(e, duration));
+  function syncFromNums() {
+    let s = Math.max(0, Math.min(parseFloat(startNum.value)||0, duration));
+    let e = Math.max(0, Math.min(parseFloat(endNum.value)||duration, duration));
     if (s >= e) e = Math.min(s + 1, duration);
-    startR.value = secsToSlider(s); endR.value = secsToSlider(e);
-    syncFromSlider();
+    startR.value = toSlider(s); endR.value = toSlider(e); sync();
   }
-
-  startR.addEventListener("input", syncFromSlider);
-  endR.addEventListener("input",   syncFromSlider);
-  startNum.addEventListener("input", syncFromNumbers);
-  endNum.addEventListener("input",   syncFromNumbers);
-  syncFromSlider();
+  startR.oninput = endR.oninput = sync;
+  startNum.oninput = endNum.oninput = syncFromNums;
+  sync();
 }
 
 function renderSegList(segs, duration) {
@@ -1062,18 +1041,11 @@ document.getElementById("add-seg-btn").addEventListener("click", () => {
   editingTrack.segments.push({ name, start, end });
   renderSegList(editingTrack.segments, editingTrack.duration_seconds);
   document.getElementById("seg-name").value = "";
-  document.getElementById("seg-start").value = "";
-  document.getElementById("seg-end").value = "";
-  // Reset slider
-  const endR = document.getElementById("dr-end");
-  document.getElementById("dr-start").value = 0;
-  if (endR) endR.value = 1000;
   initDualRange(editingTrack.duration_seconds);
 });
 
-document.getElementById("track-modal-close").addEventListener("click", () => {
-  document.getElementById("track-modal").classList.add("hidden");
-});
+document.getElementById("track-modal-close").addEventListener("click", () =>
+  document.getElementById("track-modal").classList.add("hidden"));
 document.getElementById("track-modal").addEventListener("click", e => {
   if (e.target === document.getElementById("track-modal"))
     document.getElementById("track-modal").classList.add("hidden");
@@ -1082,18 +1054,16 @@ document.getElementById("track-modal").addEventListener("click", e => {
 document.getElementById("save-track-btn").addEventListener("click", async () => {
   if (!editingTrack) return;
   const payload = {
-    custom_label: document.getElementById("edit-custom-label").value.trim() || null,
-    title: document.getElementById("edit-title").value.trim(),
+    custom_label:   document.getElementById("edit-custom-label").value.trim() || null,
+    title:          document.getElementById("edit-title").value.trim(),
     source_channel: document.getElementById("edit-channel").value.trim(),
-    mood_tags: document.getElementById("edit-moods").value
-      .split(",").map(s => s.trim()).filter(Boolean),
-    segments: editingTrack.segments || [],
+    mood_tags:      document.getElementById("edit-moods").value.split(",").map(s => s.trim()).filter(Boolean),
+    segments:       editingTrack.segments || [],
   };
   try {
     const updated = await api("POST", `/tracks/${editingTrack.id}`, payload);
     const idx = library.findIndex(t => t.id === editingTrack.id);
     if (idx >= 0) library[idx] = updated;
-    // Refresh mixer tracks for this track
     for (const [sid, node] of activeTracks) {
       if (node.meta.id === updated.id) {
         node.meta = updated;
@@ -1116,18 +1086,17 @@ async function loadStats() {
   document.getElementById("stat-all").textContent  = fmtMins(stats.total_minutes.all_time);
   document.getElementById("stat-7d").textContent   = fmtMins(stats.total_minutes.last_7d);
   document.getElementById("stat-30d").textContent  = fmtMins(stats.total_minutes.last_30d);
-
   renderStatsTable("top-count-table", stats.top_by_count, row => {
     const t = library.find(l => l.id === row.track_id);
-    return [t?.title || row.track_id, row.play_count + " plays"];
+    return [t ? displayName(t) : row.track_id, row.play_count + " plays"];
   });
   renderStatsTable("top-mins-table", stats.top_by_minutes, row => {
     const t = library.find(l => l.id === row.track_id);
-    return [t?.title || row.track_id, fmtMins(row.total_minutes)];
+    return [t ? displayName(t) : row.track_id, fmtMins(row.total_minutes)];
   });
   renderStatsTable("recent-table", stats.recently_played, row => {
     const t = library.find(l => l.id === row.track_id);
-    return [t?.title || row.track_id, new Date(row.last_played).toLocaleDateString()];
+    return [t ? displayName(t) : row.track_id, new Date(row.last_played).toLocaleDateString()];
   });
 }
 
@@ -1151,8 +1120,10 @@ function renderStatsTable(id, rows, mapper) {
 // ---------------------------------------------------------------------------
 
 (async () => {
+  initQueueDrag();
   await loadLibrary();
   await loadPresets();
-  renderMixerEmpty();
+  updateZoneEmpty();
+  updateTransportLabel();
   switchView("mixer");
 })();

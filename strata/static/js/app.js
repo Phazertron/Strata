@@ -29,6 +29,8 @@ let pollTimer = null;
 
 const CROSSFADE_S = 1.5;   // crossfade duration in seconds
 
+let globalPaused = true;   // start paused until user has tracks loaded
+
 let library  = [];
 let presets  = [];
 let currentView = "mixer";
@@ -66,6 +68,9 @@ function esc(s) {
 
 // Safe HTML id/CSS selector from arbitrary string
 function safeId(str) { return String(str).replace(/[^a-zA-Z0-9_-]/g, "_"); }
+
+// Display name: custom_label if set, otherwise title
+function displayName(track) { return track.custom_label || track.title || "Untitled"; }
 
 function slotIdFor(trackId, segName) {
   return segName ? `${trackId}-seg-${safeId(segName)}` : trackId;
@@ -176,8 +181,8 @@ function makeCard(track) {
       ? `<img class="card-thumb" src="${thumbUrl}" alt="" loading="lazy">`
       : `<div class="card-thumb-placeholder">♫</div>`}
     <div class="card-body">
-      <div class="card-title">${esc(track.title)}</div>
-      ${track.source_channel ? `<div class="card-channel">${esc(track.source_channel)}</div>` : ""}
+      <div class="card-title">${esc(displayName(track))}</div>
+      ${track.custom_label ? `<div class="card-channel" style="color:var(--text-dim);font-style:italic">${esc(track.title)}</div>` : (track.source_channel ? `<div class="card-channel">${esc(track.source_channel)}</div>` : "")}
       <div class="card-moods">
         ${(track.mood_tags || []).map(m => `<span class="mood-chip">${esc(m)}</span>`).join("")}
       </div>
@@ -301,9 +306,12 @@ function addToMixer(track, segment = null) {
 
   activeTracks.set(slotId, node);
   attachHandlers(slotId, node);
-  audioEl.play().catch(() => {});
+  if (!globalPaused) audioEl.play().catch(() => {});
+  else audioEl.pause();
+  globalPaused = false;    // adding a track implicitly starts playback
   renderMixerTrack(slotId);
   renderMixerEmpty();
+  updateTransportLabel();
 }
 
 function removeFromMixer(slotId) {
@@ -330,6 +338,7 @@ function removeFromMixer(slotId) {
   const el = document.getElementById("mtrack-" + slotId);
   if (el) el.remove();
   renderMixerEmpty();
+  updateTransportLabel();
 }
 
 // ---------------------------------------------------------------------------
@@ -365,17 +374,17 @@ function attachHandlers(slotId, node) {
 function updateSeekDisplay(slotId, node) {
   const el = document.getElementById("mtrack-" + slotId);
   if (!el || !node.audioEl.duration) return;
-  const slider  = el.querySelector(".seek-slider");
-  const timeEl  = el.querySelector(".time-display");
-  if (!slider) return;
+  const slider = el.querySelector(".seek-slider");
+  const timeEl = el.querySelector(".time-display");
+  if (!slider || slider.dataset.seeking === "1") return;  // user is dragging
 
   const cur = node.audioEl.currentTime;
   slider.value = (cur / node.audioEl.duration) * 1000;
 
   if (timeEl) {
     const seg = node.segment;
-    const display  = seg ? Math.max(0, cur - seg.start) : cur;
-    const total    = seg ? (seg.end - seg.start) : node.audioEl.duration;
+    const display = seg ? Math.max(0, cur - seg.start) : cur;
+    const total   = seg ? seg.end - seg.start : node.audioEl.duration;
     timeEl.textContent = `${fmt(display)} / ${fmt(total)}`;
   }
 }
@@ -401,9 +410,13 @@ function renderMixerTrack(slotId) {
       ? `<img class="thumb" src="${thumbUrl}" alt="">`
       : `<div class="thumb-placeholder">♫</div>`}
     <div class="mixer-track-info">
-      <div class="title">${esc(meta.title)}</div>
-      ${segment ? `<div class="seg-label">◈ ${esc(segment.name)}</div>` : ""}
-      ${meta.source_channel ? `<div class="channel">${esc(meta.source_channel)}</div>` : ""}
+      <div class="slot-name" contenteditable="true" spellcheck="false"
+           data-placeholder="${esc(segment ? segment.name : displayName(meta))}"
+           title="Click to rename this mixer slot"></div>
+      <div class="slot-origin">
+        ${esc(displayName(meta))}${meta.source_channel && !meta.custom_label ? ` · ${esc(meta.source_channel)}` : ""}
+        ${segment ? ` <span class="seg-label">◈ ${esc(segment.name)}</span>` : ""}
+      </div>
       <div class="mixer-seek-row">
         <span class="time-display">0:00 / ${fmt(segment ? segment.end - segment.start : meta.duration_seconds)}</span>
         <input type="range" class="seek-slider" min="0" max="1000" value="0">
@@ -413,11 +426,26 @@ function renderMixerTrack(slotId) {
         <input type="range" class="vol-slider" min="0" max="1" step="0.01" value="0.8" title="Volume">
         <button class="toggle-btn on" data-loop="true" title="Loop">🔁</button>
         <button class="mode-btn toggle-btn" title="Play mode: Loop">Loop</button>
-        <button class="toggle-btn" data-action="edit-segs" title="Edit segments">Segs</button>
+        <button class="toggle-btn" data-action="edit-segs" title="Edit segments">✎</button>
         <button class="toggle-btn" data-action="remove" style="margin-left:auto">✕</button>
       </div>
     </div>
   `;
+
+  // Contenteditable slot name: show placeholder when empty, grey out origin when custom name set
+  const slotNameEl = div.querySelector(".slot-name");
+  const slotOriginEl = div.querySelector(".slot-origin");
+
+  function syncSlotName() {
+    const val = slotNameEl.textContent.trim();
+    node.displayName = val || null;
+    slotOriginEl.classList.toggle("origin-dimmed", !!val);
+    slotNameEl.classList.toggle("empty", !val);
+  }
+  slotNameEl.addEventListener("input",  syncSlotName);
+  slotNameEl.addEventListener("blur",   () => { if (!slotNameEl.textContent.trim()) slotNameEl.textContent = ""; syncSlotName(); });
+  slotNameEl.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); slotNameEl.blur(); } });
+  syncSlotName();
 
   // Render segment bar if whole track with segments
   if (!segment && meta.segments?.length && meta.duration_seconds) {
@@ -457,17 +485,25 @@ function renderMixerTrack(slotId) {
     }
   });
 
-  // — Seek
+  // — Seek: update display while dragging, only seek on release
   const seekSlider = div.querySelector(".seek-slider");
+  const timeEl = div.querySelector(".time-display");
+
   seekSlider.addEventListener("input", () => {
+    seekSlider.dataset.seeking = "1";
+    const pct = parseFloat(seekSlider.value) / 1000;
+    const seg = node.segment;
+    const dur = seg ? seg.end - seg.start : (node.audioEl.duration || 0);
+    if (timeEl) timeEl.textContent = `${fmt(pct * dur)} / ${fmt(dur)}`;
+  });
+
+  seekSlider.addEventListener("change", () => {
+    seekSlider.dataset.seeking = "";
     if (!node.audioEl.duration) return;
-    const target = (seekSlider.value / 1000) * node.audioEl.duration;
-    // Clamp to segment bounds if applicable
-    if (node.segment) {
-      node.audioEl.currentTime = Math.min(Math.max(target, node.segment.start), node.segment.end - 0.5);
-    } else {
-      node.audioEl.currentTime = target;
-    }
+    const target = (parseFloat(seekSlider.value) / 1000) * node.audioEl.duration;
+    node.audioEl.currentTime = node.segment
+      ? Math.min(Math.max(target, node.segment.start), node.segment.end - 0.5)
+      : target;
   });
 
   // — Volume
@@ -536,6 +572,68 @@ function jumpToSegment(slotId, seg, chip) {
 // Master volume
 document.getElementById("master-vol").addEventListener("input", e => {
   masterGain.gain.value = parseFloat(e.target.value);
+});
+
+// ---------------------------------------------------------------------------
+// Transport (global play/pause — always in header)
+// ---------------------------------------------------------------------------
+
+function updateTransportLabel() {
+  const n = activeTracks.size;
+  const el = document.getElementById("transport-label");
+  if (el) el.textContent = n === 0 ? "No tracks" : `${n} track${n > 1 ? "s" : ""}`;
+  const btn = document.getElementById("transport-play");
+  if (btn) btn.textContent = globalPaused ? "▶" : "⏸";
+}
+
+function toggleGlobalPlayback() {
+  if (activeTracks.size === 0) return;
+  resumeCtx();
+  globalPaused = !globalPaused;
+
+  for (const [slotId, node] of activeTracks) {
+    if (globalPaused) {
+      node.audioEl.pause();
+    } else {
+      node.audioEl.play().catch(() => {});
+    }
+    const el = document.getElementById("mtrack-" + slotId);
+    if (el) {
+      const pb = el.querySelector(".play-btn");
+      if (pb) {
+        pb.dataset.playing = String(!globalPaused);
+        pb.textContent = globalPaused ? "▶" : "⏸";
+        pb.classList.toggle("paused", globalPaused);
+      }
+    }
+  }
+  updateTransportLabel();
+}
+
+document.getElementById("transport-play").addEventListener("click", toggleGlobalPlayback);
+
+document.addEventListener("keydown", e => {
+  const mediaKeys = ["MediaPlayPause", "MediaPlay", "MediaPause", "MediaStop"];
+
+  if (mediaKeys.includes(e.code)) {
+    // Media keys always work regardless of focus
+    e.preventDefault();
+    if (e.code === "MediaStop") {
+      // Stop = pause all (don't toggle)
+      if (!globalPaused) toggleGlobalPlayback();
+    } else {
+      toggleGlobalPlayback();
+    }
+    return;
+  }
+
+  if (e.code === "Space") {
+    const tag = document.activeElement?.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" ||
+        document.activeElement?.isContentEditable) return;
+    e.preventDefault();
+    toggleGlobalPlayback();
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -857,12 +955,23 @@ let editingTrack = null;
 
 function openTrackModal(track) {
   editingTrack = { ...track, segments: [...(track.segments || [])] };
-  document.getElementById("edit-title").value   = track.title || "";
-  document.getElementById("edit-channel").value = track.source_channel || "";
-  document.getElementById("edit-moods").value   = (track.mood_tags || []).join(", ");
+  document.getElementById("edit-custom-label").value = track.custom_label || "";
+  document.getElementById("edit-title").value        = track.title || "";
+  document.getElementById("edit-channel").value      = track.source_channel || "";
+  document.getElementById("edit-moods").value        = (track.mood_tags || []).join(", ");
+
+  // Grey out the original metadata block when a custom label is already set
+  syncOriginalsDim();
+  document.getElementById("edit-custom-label").addEventListener("input", syncOriginalsDim);
+
   renderSegList(editingTrack.segments, track.duration_seconds);
   initDualRange(track.duration_seconds);
   document.getElementById("track-modal").classList.remove("hidden");
+}
+
+function syncOriginalsDim() {
+  const hasLabel = !!document.getElementById("edit-custom-label").value.trim();
+  document.getElementById("edit-originals").style.opacity = hasLabel ? "0.45" : "1";
 }
 
 // Dual-range slider for segment selection
@@ -973,6 +1082,7 @@ document.getElementById("track-modal").addEventListener("click", e => {
 document.getElementById("save-track-btn").addEventListener("click", async () => {
   if (!editingTrack) return;
   const payload = {
+    custom_label: document.getElementById("edit-custom-label").value.trim() || null,
     title: document.getElementById("edit-title").value.trim(),
     source_channel: document.getElementById("edit-channel").value.trim(),
     mood_tags: document.getElementById("edit-moods").value

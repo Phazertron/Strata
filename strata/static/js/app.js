@@ -17,13 +17,15 @@ function resumeCtx() {
 // ---------------------------------------------------------------------------
 
 // activeTracks: Map<slotId, TrackNode>
-// slotId = trackId  OR  trackId-seg-SafeName
+// Bed slotId = trackId OR trackId-seg-SafeName  (deduplicated)
+// Queue slotId = trackId-qN                     (allows repeats)
 const activeTracks = new Map();
 
 // Queue: ordered slotIds that play in sequence
-let sequenceOrder   = [];
-let currentQueueIdx = -1;   // index of the currently playing queue item
-let queueLooping    = true;
+let sequenceOrder    = [];
+let currentQueueIdx  = -1;
+let queueLooping     = true;
+let _queueSlotSeq    = 0;   // counter for unique queue slot IDs
 
 // Download jobs
 let activeJobs = {};
@@ -34,6 +36,7 @@ const CROSSFADE_S = 1.5;
 let globalPaused = true;
 let library  = [];
 let presets  = [];
+let currentPresetName = null;   // name of the last loaded preset
 let currentView = "mixer";
 let libTab = "all";
 let libSort = "date";
@@ -192,15 +195,15 @@ function makeCard(track) {
         <div class="seg-extract-item">
           <span class="seg-extract-name">${esc(s.name)}</span>
           <span class="seg-extract-times">${fmt(s.start)}–${fmt(s.end)}</span>
-          <button class="seg-extract-add" data-zone="bed"   data-seg-name="${esc(s.name)}">Bed</button>
-          <button class="seg-extract-add" data-zone="queue" data-seg-name="${esc(s.name)}">Queue</button>
+          <button class="seg-extract-add" data-zone="bed"   data-seg-name="${esc(s.name)}" title="Add to Beds">∞</button>
+          <button class="seg-extract-add" data-zone="queue" data-seg-name="${esc(s.name)}" title="Add to Queue">⊕</button>
         </div>`).join("")}</div>` : ""}
     </div>
     <div class="card-actions">
-      <button data-action="bed"   title="Add to Beds (loops)">→ Bed</button>
-      <button data-action="queue" title="Add to Queue (sequence)">→ Queue</button>
+      <button data-action="bed"   title="Add to Beds — loops continuously">∞ Bed</button>
+      <button data-action="queue" title="Add to Queue — plays in sequence">⊕ Queue</button>
       <button data-action="edit"  title="Edit metadata">✎</button>
-      <button data-action="delete" class="danger" title="Delete">✕</button>
+      <button data-action="delete" class="danger card-delete" title="Delete track">🗑</button>
     </div>
   `;
 
@@ -267,8 +270,10 @@ document.getElementById("lib-sort").addEventListener("change", e => {
 
 function addToMixer(track, segment = null, zone = "bed") {
   resumeCtx();
-  const slotId = slotIdFor(track.id, segment?.name);
-  if (activeTracks.has(slotId)) { toast("Already in mixer"); return; }
+  // Beds deduplicate (same track can't loop twice); queue allows repeats
+  const baseSlotId = slotIdFor(track.id, segment?.name);
+  const slotId     = zone === "queue" ? `${baseSlotId}-q${++_queueSlotSeq}` : baseSlotId;
+  if (zone === "bed" && activeTracks.has(slotId)) { toast("Already in beds"); return; }
 
   const audioEl    = new Audio(`/api/tracks/${track.id}/audio`);
   audioEl.crossOrigin = "anonymous";
@@ -773,14 +778,16 @@ async function loadPresets() {
     presets.map(p => `<option value="${esc(p.name)}">${esc(p.name)}</option>`).join("");
 }
 
-document.getElementById("preset-select").addEventListener("change", async e => {
-  const name = e.target.value;
-  if (!name) return;
-  const preset = presets.find(p => p.name === name);
-  if (!preset) return;
+function setCurrentPreset(name) {
+  currentPresetName = name;
+  const lbl = document.getElementById("current-preset-label");
+  if (lbl) lbl.textContent = name || "No preset";
+  const def = document.getElementById("set-default-btn");
+  if (def) def.classList.toggle("on", name && localStorage.getItem("strata_default_preset") === name);
+}
 
+async function applyPreset(preset) {
   [...activeTracks.keys()].forEach(removeFromMixer);
-
   for (const entry of preset.tracks) {
     const track = library.find(t => t.id === entry.track_id);
     if (!track) continue;
@@ -788,20 +795,42 @@ document.getElementById("preset-select").addEventListener("change", async e => {
     if (!segment && entry.active_segment) {
       segment = track.segments?.find(s => s.name === entry.active_segment) || null;
     }
-    // Support both new 'zone' field and legacy 'play_mode'
     const zone = entry.zone || (entry.play_mode === "sequence" ? "queue" : "bed");
+    const keysBefore = new Set(activeTracks.keys());
     addToMixer(track, segment, zone);
-    const slotId = slotIdFor(track.id, segment?.name);
-    const node = activeTracks.get(slotId);
-    if (!node) continue;
+    // The new slot is whichever key appeared after the call
+    const newSlotId = [...activeTracks.keys()].find(k => !keysBefore.has(k));
+    if (!newSlotId) continue;
+    const node = activeTracks.get(newSlotId);
     node.gainNode.gain.value = entry.volume ?? 0.8;
     node._targetVolume = entry.volume ?? 0.8;
-    const vs = document.querySelector(`#mtrack-${slotId} .vol-slider`);
+    const vs = document.querySelector(`#mtrack-${CSS.escape(newSlotId)} .vol-slider`);
     if (vs) vs.value = entry.volume ?? 0.8;
   }
+  setCurrentPreset(preset.name);
+  toast(`Loaded: ${preset.name}`);
+}
 
+document.getElementById("preset-select").addEventListener("change", async e => {
+  const name = e.target.value;
+  if (!name) return;
+  const preset = presets.find(p => p.name === name);
+  if (preset) await applyPreset(preset);
   e.target.value = "";
-  toast(`Loaded: ${name}`);
+});
+
+document.getElementById("set-default-btn").addEventListener("click", () => {
+  if (!currentPresetName) { toast("Load a preset first", true); return; }
+  const current = localStorage.getItem("strata_default_preset");
+  if (current === currentPresetName) {
+    localStorage.removeItem("strata_default_preset");
+    document.getElementById("set-default-btn").classList.remove("on");
+    toast("Default preset cleared");
+  } else {
+    localStorage.setItem("strata_default_preset", currentPresetName);
+    document.getElementById("set-default-btn").classList.add("on");
+    toast(`"${currentPresetName}" set as default`);
+  }
 });
 
 document.getElementById("save-preset-btn").addEventListener("click", async () => {
@@ -1126,4 +1155,10 @@ function renderStatsTable(id, rows, mapper) {
   updateZoneEmpty();
   updateTransportLabel();
   switchView("mixer");
+  // Auto-load default preset if set
+  const defaultPreset = localStorage.getItem("strata_default_preset");
+  if (defaultPreset) {
+    const preset = presets.find(p => p.name === defaultPreset);
+    if (preset) { await applyPreset(preset); toast(`Default preset loaded: ${defaultPreset}`); }
+  }
 })();

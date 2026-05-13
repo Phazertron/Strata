@@ -299,7 +299,6 @@ main {
   font-size: 11px;
   color: var(--text-dim);
   opacity: .6;
-  flex: 1;
 }
 
 .zone-tracks {
@@ -307,6 +306,16 @@ main {
   flex-direction: column;
   gap: 8px;
 }
+
+.zone-vol-wrap {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-left: auto;
+}
+.zone-vol-wrap input[type=range] { width: 70px; }
 
 .zone-empty {
   display: flex;
@@ -519,6 +528,10 @@ main {
   cursor: pointer;
   font-size: 11px;
   transition: background 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
 }
 .card-actions button:hover { background: var(--accent); }
 .card-actions button.card-delete { color: var(--danger); }
@@ -836,7 +849,8 @@ input[type=range]::-webkit-slider-thumb {
 }
 .seg-extract-name  { flex: 1; font-weight: 600; color: var(--text); }
 .seg-extract-times { color: var(--text-dim); white-space: nowrap; }
-.seg-extract-mix {
+.seg-extract-mix,
+.seg-extract-add {
   background: var(--surface2);
   border: 1px solid var(--accent);
   color: var(--accent);
@@ -845,8 +859,11 @@ input[type=range]::-webkit-slider-thumb {
   cursor: pointer;
   font-size: 10px;
   white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
 }
-.seg-extract-mix:hover { background: var(--accent); color: #fff; }
+.seg-extract-mix:hover,
+.seg-extract-add:hover { background: var(--accent); color: #fff; }
 
 /* ── Mixer slot name (contenteditable custom label) ──────────────────────── */
 .slot-name {

@@ -151,6 +151,15 @@ main {
   margin-left: auto;
 }
 
+.preset-active-label {
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 #preset-select {
   background: var(--surface2);
   border: 1px solid var(--border);
@@ -512,7 +521,8 @@ main {
   transition: background 0.15s;
 }
 .card-actions button:hover { background: var(--accent); }
-.card-actions button.danger:hover { background: var(--danger); }
+.card-actions button.card-delete { color: var(--danger); }
+.card-actions button.card-delete:hover { background: var(--danger); color: #fff; }
 
 /* ── Stats view ───────────────────────────────────────────────────────────── */
 #stats-view {

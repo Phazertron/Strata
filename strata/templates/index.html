@@ -35,8 +35,10 @@
     <div id="mixer-view" class="view active">
       <div id="mixer-controls">
         <div id="preset-controls">
+          <span id="current-preset-label" class="preset-active-label">No preset</span>
+          <button class="toggle-btn" id="set-default-btn" title="Toggle this preset as the default on startup">★ Default</button>
           <select id="preset-select"></select>
-          <button class="btn secondary" id="save-preset-btn" title="Save current mixer as preset">Save preset</button>
+          <button class="btn secondary" id="save-preset-btn" title="Save current mixer as preset">Save</button>
           <button class="btn secondary danger" id="delete-preset-btn" title="Delete selected preset">Delete</button>
         </div>
       </div>

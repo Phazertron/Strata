@@ -66,14 +66,15 @@ def _parse_description_chapters(description: str, total_duration: float | None) 
         except (ValueError, IndexError):
             continue
 
-        # Title = text before timestamp; strip URLs and leading track numbers
+        # Title = text before timestamp; strip URLs, leading track numbers, and brackets
         before = line[:m.start()].strip()
         before = _URL_RE.sub("", before).strip()
-        before = _NUM_RE.sub("", before).strip(" -–·•")
+        before = _NUM_RE.sub("", before).strip(" -–·•[]()")
 
         # Also check text after timestamp (some formats put title there)
         after = line[m.end():].strip()
-        after = _URL_RE.sub("", after).strip(" -–·•")
+        after = _URL_RE.sub("", after).strip(" -–·•[]()")
+        after = _NUM_RE.sub("", after).strip(" -–·•[]()")
 
         title = before or after
         if not title:

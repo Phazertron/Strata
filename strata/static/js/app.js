@@ -1145,8 +1145,8 @@ function parseTracklistText(text, totalDuration) {
 
     let before = line.slice(0, m.index).trim().replace(urlRe, "").trim();
     let after  = line.slice(m.index + m[0].length).trim().replace(urlRe, "").trim();
-    before = before.replace(numRe, "").trim().replace(/[-–·•\s]+$/, "").trim();
-    after  = after.replace(/^[-–·•\s]+/, "").trim();
+    before = before.replace(numRe, "").trim().replace(/[-–·•\s\[\]()]+$/, "").trim();
+    after  = after.replace(/^[-–·•\s\[\]()]+/, "").replace(numRe, "").trim().replace(/[-–·•\s\[\]()]+$/, "").trim();
 
     const title = before || after || `Part ${candidates.length + 1}`;
     candidates.push({ start: secs, title });

@@ -62,6 +62,10 @@
           <div class="zone-header">
             <span class="zone-title">Queue</span>
             <span class="zone-hint">Plays in sequence · drag to reorder</span>
+            <div class="zone-vol-wrap">
+              <span>Vol</span>
+              <input id="queue-master-vol" type="range" min="0" max="1" step="0.01" value="1" title="Queue master volume">
+            </div>
             <button class="toggle-btn on" id="queue-loop-btn" title="Loop queue when it reaches the end">🔁 Loop</button>
           </div>
           <div id="queue-tracks" class="zone-tracks"></div>

@@ -16,6 +16,20 @@ function resumeCtx() {
 // State
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Icons (inline SVG)
+// ---------------------------------------------------------------------------
+
+// Sine-wave path — visually matches brain delta/theta waves (beds = ambient loops)
+const ICON_BED = `<svg width="18" height="10" viewBox="0 0 18 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M0 5 C1.8 5 2.2 1 4.5 1 C6.8 1 7.2 9 9 9 C10.8 9 11.2 1 13.5 1 C15.8 1 16.2 5 18 5"/></svg>`;
+
+// Three-line list + crosshair plus — classic "add to queue" (Spotify/YouTube style)
+const ICON_QUEUE = `<svg width="18" height="12" viewBox="0 0 18 12" fill="currentColor" aria-hidden="true"><rect x="0" y="0.5" width="11" height="1.5" rx="0.75"/><rect x="0" y="4.5" width="11" height="1.5" rx="0.75"/><rect x="0" y="8.5" width="11" height="1.5" rx="0.75"/><rect x="13.25" y="3.5" width="1.5" height="5" rx="0.75"/><rect x="11" y="5.25" width="6" height="1.5" rx="0.75"/></svg>`;
+
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+
 // activeTracks: Map<slotId, TrackNode>
 // Bed slotId = trackId OR trackId-seg-SafeName  (deduplicated)
 // Queue slotId = trackId-qN                     (allows repeats)
@@ -25,7 +39,8 @@ const activeTracks = new Map();
 let sequenceOrder    = [];
 let currentQueueIdx  = -1;
 let queueLooping     = true;
-let _queueSlotSeq    = 0;   // counter for unique queue slot IDs
+let _queueSlotSeq    = 0;       // counter for unique queue slot IDs
+let queueMasterVolume = 1.0;    // multiplier applied on top of each queue track's individual vol
 
 // Download jobs
 let activeJobs = {};
@@ -195,13 +210,13 @@ function makeCard(track) {
         <div class="seg-extract-item">
           <span class="seg-extract-name">${esc(s.name)}</span>
           <span class="seg-extract-times">${fmt(s.start)}–${fmt(s.end)}</span>
-          <button class="seg-extract-add" data-zone="bed"   data-seg-name="${esc(s.name)}" title="Add to Beds">∞</button>
-          <button class="seg-extract-add" data-zone="queue" data-seg-name="${esc(s.name)}" title="Add to Queue">⊕</button>
+          <button class="seg-extract-add" data-zone="bed"   data-seg-name="${esc(s.name)}" title="Add to Beds">${ICON_BED}</button>
+          <button class="seg-extract-add" data-zone="queue" data-seg-name="${esc(s.name)}" title="Add to Queue">${ICON_QUEUE}</button>
         </div>`).join("")}</div>` : ""}
     </div>
     <div class="card-actions">
-      <button data-action="bed"   title="Add to Beds — loops continuously">∞ Bed</button>
-      <button data-action="queue" title="Add to Queue — plays in sequence">⊕ Queue</button>
+      <button data-action="bed"   title="Add to Beds — loops continuously">${ICON_BED} Bed</button>
+      <button data-action="queue" title="Add to Queue — plays in sequence">${ICON_QUEUE} Queue</button>
       <button data-action="edit"  title="Edit metadata">✎</button>
       <button data-action="delete" class="danger card-delete" title="Delete track">🗑</button>
     </div>
@@ -279,7 +294,8 @@ function addToMixer(track, segment = null, zone = "bed") {
   audioEl.crossOrigin = "anonymous";
   const sourceNode = audioCtx.createMediaElementSource(audioEl);
   const gainNode   = audioCtx.createGain();
-  gainNode.gain.value = 0.8;
+  const initVol    = zone === "queue" ? 0.8 * queueMasterVolume : 0.8;
+  gainNode.gain.value = initVol;
   sourceNode.connect(gainNode);
   gainNode.connect(masterGain);
 
@@ -523,8 +539,8 @@ function renderMixerTrack(slotId) {
   // — Volume
   const volSlider = div.querySelector(".vol-slider");
   volSlider.addEventListener("input", () => {
-    node.gainNode.gain.value = parseFloat(volSlider.value);
     node._targetVolume = parseFloat(volSlider.value);
+    node.gainNode.gain.value = node._targetVolume * (zone === "queue" ? queueMasterVolume : 1);
   });
 
   // — Loop (bed only)
@@ -624,7 +640,7 @@ function crossfadeNodes(from, to, dur) {
     from.gainNode.gain.exponentialRampToValueAtTime(0.001, now + dur);
     from.gainNode.gain.setValueAtTime(0, now + dur);
   }
-  const toVol = to._targetVolume || 0.8;
+  const toVol = (to._targetVolume || 0.8) * (to.zone === "queue" ? queueMasterVolume : 1);
   to.gainNode.gain.cancelScheduledValues(now);
   to.gainNode.gain.setValueAtTime(0.001, now);
   to.gainNode.gain.exponentialRampToValueAtTime(toVol, now + dur);
@@ -696,6 +712,16 @@ function initQueueDrag() {
 document.getElementById("queue-loop-btn").addEventListener("click", () => {
   queueLooping = !queueLooping;
   document.getElementById("queue-loop-btn").classList.toggle("on", queueLooping);
+});
+
+document.getElementById("queue-master-vol").addEventListener("input", e => {
+  queueMasterVolume = parseFloat(e.target.value);
+  for (const [, node] of activeTracks) {
+    if (node.zone === "queue") {
+      node.gainNode.gain.cancelScheduledValues(audioCtx.currentTime);
+      node.gainNode.gain.value = node._targetVolume * queueMasterVolume;
+    }
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -802,8 +828,8 @@ async function applyPreset(preset) {
     const newSlotId = [...activeTracks.keys()].find(k => !keysBefore.has(k));
     if (!newSlotId) continue;
     const node = activeTracks.get(newSlotId);
-    node.gainNode.gain.value = entry.volume ?? 0.8;
     node._targetVolume = entry.volume ?? 0.8;
+    node.gainNode.gain.value = node._targetVolume * (node.zone === "queue" ? queueMasterVolume : 1);
     const vs = document.querySelector(`#mtrack-${CSS.escape(newSlotId)} .vol-slider`);
     if (vs) vs.value = entry.volume ?? 0.8;
   }

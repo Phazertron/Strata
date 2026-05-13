@@ -65,6 +65,14 @@ def _run_download_job(job_id: str, url: str, track_id: str, track_dir: Path):
                 thumb_src.rename(thumb_dest)
             thumb_name = "thumbnail.jpg"
 
+        segments = []
+        for ch in (info.get("chapters") or []):
+            title = (ch.get("title") or "").strip()
+            start = ch.get("start_time", 0)
+            end   = ch.get("end_time",   0)
+            if title and end > start:
+                segments.append({"name": title, "start": round(start, 2), "end": round(end, 2)})
+
         meta = {
             "id": track_id,
             "title": info.get("title", "Unknown"),
@@ -74,7 +82,7 @@ def _run_download_job(job_id: str, url: str, track_id: str, track_dir: Path):
             "duration_seconds": info.get("duration"),
             "date_added": datetime.now(timezone.utc).isoformat(),
             "mood_tags": [],
-            "segments": [],
+            "segments": segments,
         }
         save_metadata(track_id, meta)
 

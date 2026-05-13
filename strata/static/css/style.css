@@ -430,7 +430,7 @@ main {
   overflow-y: auto;
   padding: 16px 20px;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(220px, 280px));
   gap: 14px;
   align-content: start;
 }
@@ -704,6 +704,13 @@ input.text-input:focus { outline: none; border-color: var(--accent); }
   display: flex;
   align-items: center;
   gap: 8px;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.seg-item:hover { border-color: var(--text-dim); }
+.seg-item.seg-editing {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface2));
 }
 .seg-item .seg-name { flex: 1; font-size: 13px; }
 .seg-item .seg-times { font-size: 11px; color: var(--text-dim); }
@@ -846,6 +853,8 @@ input[type=range]::-webkit-slider-thumb {
   margin-top: 6px;
   padding-top: 6px;
   border-top: 1px solid var(--border);
+  max-height: 180px;
+  overflow-y: auto;
 }
 
 .seg-extract-item {

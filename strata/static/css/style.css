@@ -687,7 +687,14 @@ input.text-input:focus { outline: none; border-color: var(--accent); }
 /* ── Track detail modal ───────────────────────────────────────────────────── */
 #track-modal .modal { width: 560px; max-height: 85vh; overflow-y: auto; }
 
-.seg-list { display: flex; flex-direction: column; gap: 6px; }
+.seg-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
 
 .seg-item {
   background: var(--surface2);

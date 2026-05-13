@@ -1,3 +1,11 @@
+  # ──────────────────────────────────────────────────────────
+  # AMBIENT MIXER — Strata
+  # Web UI: http://strata.home
+  # Layer ambient audio tracks with per-track volume and loop
+  # controls. Download from YouTube via yt-dlp, manage a local
+  # library with mood tags and segments, save mixer presets.
+  # Media: /mnt/raid/strata/media → /media (in container)
+  # ──────────────────────────────────────────────────────────
 services:
   strata:
     build:
@@ -6,8 +14,7 @@ services:
     container_name: strata
     platform: linux/arm64
     volumes:
-      # PLACEHOLDER — swap ./strata/media for /mnt/raid/strata/media once RAID drive voltage supply is fixed
-      - ./strata/media:/media
+      - /mnt/raid/strata/media:/media
     environment:
       TZ: ${TZ}
     networks:

@@ -509,14 +509,32 @@ function renderMixerTrack(slotId) {
     const bar = document.createElement("div");
     bar.className = "segment-bar";
     bar.style.marginTop = "6px";
+
+    const preview = document.createElement("div");
+    preview.className = "seg-preview";
+    preview.setAttribute("aria-hidden", "true");
+    const previewName = document.createElement("span");
+    previewName.className = "seg-preview-name";
+    const previewTime = document.createElement("span");
+    previewTime.className = "seg-preview-time";
+    preview.append(previewName, previewTime);
+    bar.appendChild(preview);
+
     meta.segments.forEach(s => {
       const left  = (s.start / meta.duration_seconds * 100).toFixed(2);
       const width = ((s.end - s.start) / meta.duration_seconds * 100).toFixed(2);
       const chip  = document.createElement("div");
       chip.className = "seg-chip";
       chip.style.cssText = `left:${left}%;width:${width}%`;
-      chip.title = s.name; chip.textContent = s.name; chip.dataset.segName = s.name;
+      chip.title = s.name;
+      chip.dataset.segName = s.name;
       chip.addEventListener("click", () => jumpToSegment(slotId, s, chip));
+      chip.addEventListener("mouseenter", () => {
+        previewName.textContent = s.name;
+        previewTime.textContent = `${fmt(s.start)} – ${fmt(s.end)}`;
+        preview.classList.add("visible");
+      });
+      chip.addEventListener("mouseleave", () => preview.classList.remove("visible"));
       bar.appendChild(chip);
     });
     div.querySelector(".mixer-track-info").appendChild(bar);

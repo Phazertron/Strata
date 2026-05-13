@@ -1046,7 +1046,8 @@ document.getElementById("download-btn").addEventListener("click", async () => {
 // Track detail / edit modal
 // ---------------------------------------------------------------------------
 
-let editingTrack = null;
+let editingTrack   = null;
+let editingSegIdx  = -1;
 
 function openTrackModal(track) {
   editingTrack = { ...track, segments: [...(track.segments || [])] };
@@ -1057,6 +1058,7 @@ function openTrackModal(track) {
   syncOriginalsDim();
   const lbl = document.getElementById("edit-custom-label");
   lbl.oninput = syncOriginalsDim;
+  editingSegIdx = -1;
   // Reset parse-tracklist section
   document.getElementById("tracklist-paste").value = "";
   document.getElementById("parse-tracklist-status").textContent = "";
@@ -1254,18 +1256,53 @@ function renderSegList(segs, duration) {
   list.innerHTML = "";
   segs.forEach((seg, i) => {
     const item = document.createElement("div");
-    item.className = "seg-item";
+    item.className = "seg-item" + (i === editingSegIdx ? " seg-editing" : "");
+    item.title = "Click to edit";
     item.innerHTML = `
       <span class="seg-name">${esc(seg.name)}</span>
       <span class="seg-times">${fmt(seg.start)} – ${fmt(seg.end)}</span>
-      <button class="btn secondary" style="padding:3px 8px;font-size:11px" data-del="${i}">✕</button>
+      <button class="btn secondary" style="padding:3px 8px;font-size:11px" data-del="${i}" title="Delete">✕</button>
     `;
-    item.querySelector("[data-del]").addEventListener("click", () => {
+    item.addEventListener("click", e => {
+      if (e.target.closest("[data-del]")) return;
+      loadSegForEdit(seg, i);
+    });
+    item.querySelector("[data-del]").addEventListener("click", e => {
+      e.stopPropagation();
+      if (editingSegIdx === i) resetSegForm();
+      else if (editingSegIdx > i) editingSegIdx--;
       editingTrack.segments.splice(i, 1);
       renderSegList(editingTrack.segments, duration);
     });
     list.appendChild(item);
   });
+}
+
+function loadSegForEdit(seg, idx) {
+  if (editingSegIdx === idx) { resetSegForm(); return; }  // toggle off
+  editingSegIdx = idx;
+  document.getElementById("seg-name").value = seg.name;
+  const startEl = document.getElementById("seg-start");
+  const endEl   = document.getElementById("seg-end");
+  startEl.value = seg.start > 0 ? fmt(seg.start) : "0:00";
+  endEl.value   = fmt(seg.end);
+  startEl.dispatchEvent(new Event("blur"));  // syncs dual-range slider
+  endEl.dispatchEvent(new Event("blur"));
+  document.getElementById("add-seg-btn").textContent = "✎ Update";
+  document.getElementById("seg-name").focus();
+  renderSegList(editingTrack.segments, editingTrack.duration_seconds);
+}
+
+function resetSegForm() {
+  editingSegIdx = -1;
+  document.getElementById("seg-name").value = "";
+  const startEl = document.getElementById("seg-start");
+  const endEl   = document.getElementById("seg-end");
+  startEl.value = "0:00";
+  endEl.value   = editingTrack?.duration_seconds ? fmt(Math.round(editingTrack.duration_seconds)) : "";
+  startEl.dispatchEvent(new Event("blur"));
+  endEl.dispatchEvent(new Event("blur"));
+  document.getElementById("add-seg-btn").textContent = "＋ Add";
 }
 
 document.getElementById("add-seg-btn").addEventListener("click", () => {
@@ -1275,10 +1312,16 @@ document.getElementById("add-seg-btn").addEventListener("click", () => {
   if (!name) { toast("Enter a segment name", true); return; }
   if (end <= start) { toast("End must be after start", true); return; }
   editingTrack.segments = editingTrack.segments || [];
-  editingTrack.segments.push({ name, start, end });
+  if (editingSegIdx >= 0) {
+    editingTrack.segments[editingSegIdx] = { name, start, end };
+  } else {
+    editingTrack.segments.push({ name, start, end });
+  }
   editingTrack.segments.sort((a, b) => a.start - b.start);
+  editingSegIdx = -1;
   renderSegList(editingTrack.segments, editingTrack.duration_seconds);
   document.getElementById("seg-name").value = "";
+  document.getElementById("add-seg-btn").textContent = "＋ Add";
   initDualRange(editingTrack.duration_seconds);
 });
 

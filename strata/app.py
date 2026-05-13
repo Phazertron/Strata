@@ -1,4 +1,5 @@
 import os
+import re
 import uuid
 import json
 import shutil
@@ -23,6 +24,60 @@ app = Flask(__name__, static_folder="static", template_folder="templates")
 
 _jobs: dict = {}          # job_id → {status, url, track_id, track?, error?}
 _jobs_lock = threading.Lock()
+
+
+_TS_RE = re.compile(r'\b(\d{1,2}:\d{2}(?::\d{2})?)\b')
+_URL_RE = re.compile(r'https?://\S+')
+_NUM_RE = re.compile(r'^\d+[.)]\s*')
+
+
+def _parse_description_chapters(description: str, total_duration: float | None) -> list[dict]:
+    """Extract chapter/segment info from a video description's timestamp lines."""
+    candidates = []
+    for line in description.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        m = _TS_RE.search(line)
+        if not m:
+            continue
+        ts_str = m.group(1)
+        parts = ts_str.split(":")
+        try:
+            if len(parts) == 2:
+                secs = int(parts[0]) * 60 + int(parts[1])
+            else:
+                secs = int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+        except (ValueError, IndexError):
+            continue
+
+        # Title = text before timestamp; strip URLs and leading track numbers
+        before = line[:m.start()].strip()
+        before = _URL_RE.sub("", before).strip()
+        before = _NUM_RE.sub("", before).strip(" -–·•")
+
+        # Also check text after timestamp (some formats put title there)
+        after = line[m.end():].strip()
+        after = _URL_RE.sub("", after).strip(" -–·•")
+
+        title = before or after
+        if not title:
+            title = f"Part {len(candidates) + 1}"
+
+        candidates.append({"start": secs, "title": title})
+
+    if len(candidates) < 2:
+        return []
+
+    candidates.sort(key=lambda x: x["start"])
+
+    segments = []
+    for i, ch in enumerate(candidates):
+        end = candidates[i + 1]["start"] if i + 1 < len(candidates) else (total_duration or ch["start"] + 600)
+        if end > ch["start"]:
+            segments.append({"name": ch["title"], "start": round(ch["start"], 2), "end": round(end, 2)})
+
+    return segments
 
 
 def _run_download_job(job_id: str, url: str, track_id: str, track_dir: Path):
@@ -65,6 +120,7 @@ def _run_download_job(job_id: str, url: str, track_id: str, track_dir: Path):
                 thumb_src.rename(thumb_dest)
             thumb_name = "thumbnail.jpg"
 
+        # Build segments from yt-dlp native chapters first
         segments = []
         for ch in (info.get("chapters") or []):
             title = (ch.get("title") or "").strip()
@@ -72,6 +128,13 @@ def _run_download_job(job_id: str, url: str, track_id: str, track_dir: Path):
             end   = ch.get("end_time",   0)
             if title and end > start:
                 segments.append({"name": title, "start": round(start, 2), "end": round(end, 2)})
+
+        # If description parsing yields more chapters, prefer it
+        # (yt-dlp often misses timestamp lines that have URLs on the same line)
+        if info.get("description"):
+            desc_segs = _parse_description_chapters(info["description"], info.get("duration"))
+            if len(desc_segs) > len(segments):
+                segments = desc_segs
 
         meta = {
             "id": track_id,
@@ -211,6 +274,8 @@ def update_track(track_id):
     for field in ("title", "mood_tags", "segments", "source_channel", "custom_label"):
         if field in body:
             meta[field] = body[field]
+    if "mood_tags" in body:
+        meta["mood_tags"] = [t.strip().lower() for t in (meta["mood_tags"] or []) if t.strip()]
     save_metadata(track_id, meta)
     return jsonify(meta)
 

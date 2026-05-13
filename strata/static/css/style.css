@@ -1017,6 +1017,59 @@ input[type=range]::-webkit-slider-thumb {
   padding: 0 2px;
 }
 
+/* ── Tag autocomplete dropdown ────────────────────────────────────────────── */
+.tag-suggestions {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  margin-top: 2px;
+  max-height: 140px;
+  overflow-y: auto;
+  z-index: 60;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+}
+
+.tag-suggestion {
+  padding: 7px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--text-dim);
+  transition: background 0.1s, color 0.1s;
+}
+.tag-suggestion:hover { background: var(--surface2); color: var(--accent); }
+
+/* ── Tracklist paste section ──────────────────────────────────────────────── */
+.parse-tracklist-summary {
+  font-size: 11px;
+  color: var(--accent);
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.parse-tracklist-summary::before { content: "▸"; font-size: 10px; }
+details[open] .parse-tracklist-summary::before { content: "▾"; }
+.parse-tracklist-summary::-webkit-details-marker { display: none; }
+
+#tracklist-paste {
+  width: 100%;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  font-size: 12px;
+  font-family: monospace;
+  resize: vertical;
+}
+#tracklist-paste:focus { outline: none; border-color: var(--accent); }
+
 /* ── Download job queue ───────────────────────────────────────────────────── */
 #job-queue {
   display: none;

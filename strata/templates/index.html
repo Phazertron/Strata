@@ -199,9 +199,10 @@
           </div>
         </div>
       </div>
-      <div>
+      <div style="position:relative">
         <label style="font-size:11px;color:var(--text-dim);display:block;margin-bottom:4px">Mood tags (comma-separated)</label>
-        <input id="edit-moods" class="text-input" type="text" placeholder="Focus, Rain, Sleep">
+        <input id="edit-moods" class="text-input" type="text" placeholder="focus, rain, sleep" autocomplete="off">
+        <div id="tag-suggestions" class="tag-suggestions" style="display:none"></div>
       </div>
     </div>
 
@@ -224,17 +225,24 @@
         </div>
       </div>
 
-      <!-- Name + number inputs (synced with slider) -->
+      <!-- Parse tracklist from pasted text (comments, external sites, etc.) -->
+      <details id="parse-tracklist-details" style="margin-top:10px">
+        <summary class="parse-tracklist-summary">Paste tracklist to auto-generate segments</summary>
+        <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px">
+          <textarea id="tracklist-paste" class="text-input" rows="5"
+            placeholder="Paste a tracklist here — timestamps anywhere in each line work:&#10;01. Artist - Title  00:00&#10;02. Artist - Title  09:30 https://...&#10;03. Artist - Title  16:10"></textarea>
+          <div style="display:flex;gap:8px;align-items:center">
+            <button id="parse-tracklist-btn" class="btn secondary" style="font-size:12px">Parse</button>
+            <span id="parse-tracklist-status" style="font-size:11px;color:var(--text-dim)"></span>
+          </div>
+        </div>
+      </details>
+
+      <!-- Name + timestamp inputs (synced with slider) -->
       <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:flex-start">
         <input id="seg-name" class="text-input" type="text" placeholder="Segment name" style="flex:2;min-width:120px">
-        <div class="seg-input-group">
-          <input id="seg-start" class="text-input" type="number" placeholder="Start (s)" style="width:88px" min="0" step="1">
-          <span id="seg-start-fmt" class="seg-input-fmt">0:00</span>
-        </div>
-        <div class="seg-input-group">
-          <input id="seg-end" class="text-input" type="number" placeholder="End (s)" style="width:88px" min="0" step="1">
-          <span id="seg-end-fmt" class="seg-input-fmt">—</span>
-        </div>
+        <input id="seg-start" class="text-input" type="text" placeholder="0:00" style="width:80px" inputmode="numeric">
+        <input id="seg-end"   class="text-input" type="text" placeholder="end"  style="width:80px" inputmode="numeric">
         <button id="add-seg-btn" class="btn secondary" style="white-space:nowrap;align-self:flex-start">＋ Add</button>
       </div>
     </div>

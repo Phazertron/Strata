@@ -80,6 +80,46 @@ function fmtMins(mins) {
 
 function isoNow() { return new Date().toISOString(); }
 
+// Parse "M:SS", "MM:SS", "H:MM:SS" → seconds.  Clamps seconds/minutes to 0-59.
+function parseTimeInput(str) {
+  if (!str) return 0;
+  const parts = str.trim().split(":").map(p => parseInt(p, 10));
+  if (parts.some(isNaN)) return 0;
+  const [a = 0, b = 0, c = 0] = parts;
+  if (parts.length === 1) return a;
+  if (parts.length === 2) return a * 60 + Math.min(59, b);
+  return a * 3600 + Math.min(59, b) * 60 + Math.min(59, c);
+}
+
+// Format raw digit string (up to 6 digits) as "M:SS" / "MM:SS" / "H:MM:SS".
+function formatTimeDigits(digits) {
+  digits = digits.replace(/\D/g, "").slice(0, 6);
+  if (digits.length <= 2) return digits;
+  if (digits.length <= 4) return digits.slice(0, -2) + ":" + digits.slice(-2);
+  return digits.slice(0, -4) + ":" + digits.slice(-4, -2) + ":" + digits.slice(-2);
+}
+
+// Attach MM:SS live-formatting to a text input.
+// Returns { getSeconds(), setSeconds(n) }.
+function attachTimeInput(el) {
+  el.addEventListener("keydown", e => {
+    if (e.ctrlKey || e.metaKey) return;
+    if (["Backspace","Delete","ArrowLeft","ArrowRight","Home","End","Tab"].includes(e.key)) return;
+    if (!/^\d$/.test(e.key)) e.preventDefault();
+  });
+  el.addEventListener("input", () => {
+    const pos = el.selectionStart;
+    const raw = el.value.replace(/\D/g, "").slice(0, 6);
+    el.value = formatTimeDigits(raw);
+    // keep cursor roughly in place (colon insertion can shift it by 1)
+    try { el.setSelectionRange(pos, pos); } catch(_) {}
+  });
+  return {
+    getSeconds() { return parseTimeInput(el.value); },
+    setSeconds(secs) { el.value = secs > 0 ? fmt(secs) : "0:00"; },
+  };
+}
+
 function esc(s) {
   if (s == null) return "";
   return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
@@ -1013,11 +1053,14 @@ function openTrackModal(track) {
   document.getElementById("edit-custom-label").value = track.custom_label || "";
   document.getElementById("edit-title").value         = track.title || "";
   document.getElementById("edit-channel").value       = track.source_channel || "";
-  document.getElementById("edit-moods").value         = (track.mood_tags || []).join(", ");
+  document.getElementById("edit-moods").value         = (track.mood_tags || []).map(t => t.toLowerCase()).join(", ");
   syncOriginalsDim();
-  // Re-attach listener cleanly
   const lbl = document.getElementById("edit-custom-label");
   lbl.oninput = syncOriginalsDim;
+  // Reset parse-tracklist section
+  document.getElementById("tracklist-paste").value = "";
+  document.getElementById("parse-tracklist-status").textContent = "";
+  document.getElementById("parse-tracklist-details").removeAttribute("open");
   renderSegList(editingTrack.segments, track.duration_seconds);
   initDualRange(track.duration_seconds);
   document.getElementById("track-modal").classList.remove("hidden");
@@ -1028,6 +1071,117 @@ function syncOriginalsDim() {
   document.getElementById("edit-originals").style.opacity = has ? "0.45" : "1";
 }
 
+// ---------------------------------------------------------------------------
+// Tag autocomplete
+// ---------------------------------------------------------------------------
+
+const moodsInput   = document.getElementById("edit-moods");
+const tagSuggestEl = document.getElementById("tag-suggestions");
+
+function allLibraryTags() {
+  return [...new Set(library.flatMap(t => (t.mood_tags || []).map(s => s.toLowerCase())))].sort();
+}
+
+function currentPartialTag() {
+  const val   = moodsInput.value;
+  const parts = val.split(",");
+  return parts[parts.length - 1].trim().toLowerCase();
+}
+
+function showTagSuggestions() {
+  const partial = currentPartialTag();
+  if (!partial) { tagSuggestEl.style.display = "none"; return; }
+  const matches = allLibraryTags().filter(t => t.startsWith(partial) && t !== partial);
+  if (!matches.length) { tagSuggestEl.style.display = "none"; return; }
+  tagSuggestEl.innerHTML = matches.map(t =>
+    `<div class="tag-suggestion" data-tag="${esc(t)}">${esc(t)}</div>`
+  ).join("");
+  tagSuggestEl.style.display = "block";
+}
+
+function acceptTagSuggestion(tag) {
+  const parts  = moodsInput.value.split(",");
+  parts[parts.length - 1] = " " + tag;
+  moodsInput.value = parts.join(",") + ", ";
+  moodsInput.focus();
+  tagSuggestEl.style.display = "none";
+}
+
+moodsInput.addEventListener("input", () => {
+  moodsInput.value = moodsInput.value.toLowerCase();
+  showTagSuggestions();
+});
+moodsInput.addEventListener("blur", () => {
+  setTimeout(() => { tagSuggestEl.style.display = "none"; }, 150);
+});
+moodsInput.addEventListener("focus", showTagSuggestions);
+tagSuggestEl.addEventListener("mousedown", e => {
+  const item = e.target.closest(".tag-suggestion");
+  if (item) { e.preventDefault(); acceptTagSuggestion(item.dataset.tag); }
+});
+
+// ---------------------------------------------------------------------------
+// Tracklist parser (client-side — same logic as server description parser)
+// ---------------------------------------------------------------------------
+
+function parseTracklistText(text, totalDuration) {
+  const tsRe  = /\b(\d{1,2}:\d{2}(?::\d{2})?)\b/;
+  const urlRe = /https?:\/\/\S+/g;
+  const numRe = /^\d+[.)]\s*/;
+  const candidates = [];
+
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    if (!line) continue;
+    const m = tsRe.exec(line);
+    if (!m) continue;
+
+    const parts = m[1].split(":").map(Number);
+    const secs  = parts.length === 3
+      ? parts[0] * 3600 + parts[1] * 60 + parts[2]
+      : parts[0] * 60 + parts[1];
+
+    let before = line.slice(0, m.index).trim().replace(urlRe, "").trim();
+    let after  = line.slice(m.index + m[0].length).trim().replace(urlRe, "").trim();
+    before = before.replace(numRe, "").trim().replace(/[-–·•\s]+$/, "").trim();
+    after  = after.replace(/^[-–·•\s]+/, "").trim();
+
+    const title = before || after || `Part ${candidates.length + 1}`;
+    candidates.push({ start: secs, title });
+  }
+
+  if (candidates.length < 2) return [];
+  candidates.sort((a, b) => a.start - b.start);
+
+  return candidates.map((ch, i) => ({
+    name:  ch.title,
+    start: round2(ch.start),
+    end:   round2(candidates[i + 1]?.start ?? (totalDuration || ch.start + 600)),
+  })).filter(s => s.end > s.start);
+}
+
+function round2(n) { return Math.round(n * 100) / 100; }
+
+document.getElementById("parse-tracklist-btn").addEventListener("click", () => {
+  const text   = document.getElementById("tracklist-paste").value.trim();
+  const status = document.getElementById("parse-tracklist-status");
+  if (!text) { status.textContent = "Paste some text first."; return; }
+  const segs = parseTracklistText(text, editingTrack?.duration_seconds);
+  if (!segs.length) {
+    status.textContent = "No timestamps found — make sure lines contain MM:SS markers.";
+    return;
+  }
+  // Merge with existing segments (deduplicate by start time)
+  const existing = new Set((editingTrack.segments || []).map(s => s.start));
+  let added = 0;
+  for (const s of segs) {
+    if (!existing.has(s.start)) { editingTrack.segments.push(s); added++; }
+  }
+  editingTrack.segments.sort((a, b) => a.start - b.start);
+  renderSegList(editingTrack.segments, editingTrack.duration_seconds);
+  status.textContent = `Added ${added} segment${added !== 1 ? "s" : ""}.`;
+});
+
 function initDualRange(duration) {
   const wrap     = document.getElementById("seg-timeline-wrap");
   const startR   = document.getElementById("dr-start");
@@ -1037,34 +1191,62 @@ function initDualRange(duration) {
   const endLbl   = document.getElementById("dr-end-label");
   const startNum = document.getElementById("seg-start");
   const endNum   = document.getElementById("seg-end");
-  const startFmt = document.getElementById("seg-start-fmt");
-  const endFmt   = document.getElementById("seg-end-fmt");
+
   if (!duration) { wrap.style.display = "none"; return; }
   wrap.style.display = "block";
-  startR.value = 0; endR.value = 1000;
-  startNum.value = 0; endNum.value = Math.round(duration);
-  startNum.max = endNum.max = Math.round(duration);
-  const toSecs = v => Math.round((v / 1000) * duration);
+
+  const toSecs   = v => (v / 1000) * duration;
   const toSlider = s => Math.round((s / duration) * 1000);
-  function sync() {
+
+  // Attach live-format behaviour (only once — clone to strip old listeners)
+  const freshStart = startNum.cloneNode(true);
+  const freshEnd   = endNum.cloneNode(true);
+  startNum.parentNode.replaceChild(freshStart, startNum);
+  endNum.parentNode.replaceChild(freshEnd, endNum);
+  const ctrlStart = attachTimeInput(freshStart);
+  const ctrlEnd   = attachTimeInput(freshEnd);
+
+  function updateFill(s, e) {
+    fill.style.left  = (s / 10) + "%";
+    fill.style.width = ((e - s) / 10) + "%";
+  }
+
+  // Slider → text
+  function syncSliderToText() {
     let s = parseInt(startR.value), e = parseInt(endR.value);
-    if (s >= e - 10) { if (document.activeElement === startR) { s = e - 10; startR.value = s; } else { e = s + 10; endR.value = e; } }
-    fill.style.left = (s / 10) + "%"; fill.style.width = ((e - s) / 10) + "%";
+    if (s >= e - 10) {
+      if (document.activeElement === startR) { s = e - 10; startR.value = s; }
+      else { e = s + 10; endR.value = e; }
+    }
+    updateFill(s, e);
     const ss = toSecs(s), es = toSecs(e);
     startLbl.textContent = fmt(ss); endLbl.textContent = fmt(es);
-    startNum.value = ss; endNum.value = es;
-    if (startFmt) startFmt.textContent = fmt(ss);
-    if (endFmt)   endFmt.textContent   = fmt(es);
+    ctrlStart.setSeconds(ss);
+    ctrlEnd.setSeconds(es);
   }
-  function syncFromNums() {
-    let s = Math.max(0, Math.min(parseFloat(startNum.value)||0, duration));
-    let e = Math.max(0, Math.min(parseFloat(endNum.value)||duration, duration));
+
+  // Text → slider (called on blur so correction only fires when user is done)
+  function syncTextToSlider() {
+    let s = Math.max(0, Math.min(ctrlStart.getSeconds(), duration));
+    let e = Math.max(0, Math.min(ctrlEnd.getSeconds(),   duration));
     if (s >= e) e = Math.min(s + 1, duration);
-    startR.value = toSlider(s); endR.value = toSlider(e); sync();
+    // Write corrected values back
+    ctrlStart.setSeconds(s);
+    ctrlEnd.setSeconds(e);
+    startR.value = toSlider(s); endR.value = toSlider(e);
+    updateFill(toSlider(s), toSlider(e));
+    startLbl.textContent = fmt(s); endLbl.textContent = fmt(e);
   }
-  startR.oninput = endR.oninput = sync;
-  startNum.oninput = endNum.oninput = syncFromNums;
-  sync();
+
+  startR.oninput = endR.oninput = syncSliderToText;
+  freshStart.addEventListener("blur", syncTextToSlider);
+  freshEnd.addEventListener("blur",   syncTextToSlider);
+
+  // Initialise
+  startR.value = 0; endR.value = 1000;
+  ctrlStart.setSeconds(0);
+  ctrlEnd.setSeconds(Math.round(duration));
+  syncSliderToText();
 }
 
 function renderSegList(segs, duration) {
@@ -1088,12 +1270,13 @@ function renderSegList(segs, duration) {
 
 document.getElementById("add-seg-btn").addEventListener("click", () => {
   const name  = document.getElementById("seg-name").value.trim();
-  const start = parseFloat(document.getElementById("seg-start").value);
-  const end   = parseFloat(document.getElementById("seg-end").value);
+  const start = parseTimeInput(document.getElementById("seg-start").value);
+  const end   = parseTimeInput(document.getElementById("seg-end").value);
   if (!name) { toast("Enter a segment name", true); return; }
-  if (isNaN(start) || isNaN(end) || end <= start) { toast("Check start / end times", true); return; }
+  if (end <= start) { toast("End must be after start", true); return; }
   editingTrack.segments = editingTrack.segments || [];
   editingTrack.segments.push({ name, start, end });
+  editingTrack.segments.sort((a, b) => a.start - b.start);
   renderSegList(editingTrack.segments, editingTrack.duration_seconds);
   document.getElementById("seg-name").value = "";
   initDualRange(editingTrack.duration_seconds);
@@ -1112,7 +1295,7 @@ document.getElementById("save-track-btn").addEventListener("click", async () => 
     custom_label:   document.getElementById("edit-custom-label").value.trim() || null,
     title:          document.getElementById("edit-title").value.trim(),
     source_channel: document.getElementById("edit-channel").value.trim(),
-    mood_tags:      document.getElementById("edit-moods").value.split(",").map(s => s.trim()).filter(Boolean),
+    mood_tags:      document.getElementById("edit-moods").value.split(",").map(s => s.trim().toLowerCase()).filter(Boolean),
     segments:       editingTrack.segments || [],
   };
   try {

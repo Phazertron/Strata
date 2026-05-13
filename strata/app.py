@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sqlite3
 import threading
+import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -29,6 +30,20 @@ _jobs_lock = threading.Lock()
 _TS_RE = re.compile(r'\b(\d{1,2}:\d{2}(?::\d{2})?)\b')
 _URL_RE = re.compile(r'https?://\S+')
 _NUM_RE = re.compile(r'^\d+[.)]\s*')
+
+
+def _clean_url(url: str) -> str:
+    """Strip YouTube playlist/radio params — keep only the video ID."""
+    try:
+        p = urllib.parse.urlparse(url)
+        if p.hostname in ("www.youtube.com", "youtube.com", "m.youtube.com"):
+            qs = urllib.parse.parse_qs(p.query)
+            if "v" in qs:
+                return f"https://www.youtube.com/watch?v={qs['v'][0]}"
+        # youtu.be short links — leave as-is, they have no playlist ambiguity
+    except Exception:
+        pass
+    return url
 
 
 def _parse_description_chapters(description: str, total_duration: float | None) -> list[dict]:
@@ -86,6 +101,7 @@ def _run_download_job(job_id: str, url: str, track_id: str, track_dir: Path):
     try:
         cmd = [
             "yt-dlp",
+            "--no-playlist",
             "--extract-audio",
             "--audio-format", "mp3",
             "--audio-quality", "0",
@@ -427,7 +443,7 @@ def upload_track():
 @app.route("/api/download", methods=["POST"])
 def download_track():
     body = request.get_json(force=True)
-    url = body.get("url", "").strip()
+    url = _clean_url(body.get("url", "").strip())
     if not url:
         return jsonify({"error": "url required"}), 400
 

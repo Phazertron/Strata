@@ -1173,3 +1173,76 @@ details[open] .parse-tracklist-summary::before { content: "▾"; }
   flex-shrink: 0;
 }
 .job-dismiss:hover { color: var(--text); }
+
+/* ── Mobile ───────────────────────────────────────────────────────────────── */
+@media (max-width: 600px) {
+  header {
+    height: auto;
+    flex-wrap: wrap;
+    padding: 8px 12px;
+    gap: 6px;
+  }
+
+  header h1 {
+    order: 1;
+    font-size: 16px;
+  }
+
+  nav {
+    order: 2;
+    margin-left: auto;
+  }
+
+  nav button {
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+
+  #transport {
+    order: 3;
+    width: 100%;
+    border-left: none;
+    border-right: none;
+    border-top: 1px solid var(--border);
+    padding: 8px 0;
+    height: auto;
+  }
+
+  #transport-label { display: none; }
+
+  #master-vol { width: 60px; }
+
+  #mixer-controls {
+    padding: 8px 12px;
+    overflow-x: auto;
+  }
+
+  #preset-controls {
+    flex-wrap: wrap;
+    margin-left: 0;
+    gap: 6px;
+  }
+
+  .preset-active-label { width: 100%; max-width: none; }
+
+  #mixer-tracks { padding: 10px 12px; }
+
+  .mixer-track-row input[type=range] { width: 90px; }
+
+  .zone-header { flex-wrap: wrap; }
+
+  .zone-hint { display: none; }
+
+  #library-toolbar { padding: 8px 12px; }
+
+  #library-grid {
+    padding: 10px 12px;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  }
+
+  .stats-section { padding: 14px 12px; }
+
+  .seg-sub-row { overflow-x: hidden; }
+  .seg-extract-item { flex-wrap: wrap; gap: 4px; }
+  .seg-extract-times { flex-basis: 100%; order: 4; }
+}

@@ -488,6 +488,16 @@ main {
   transition: border-color 0.15s;
 }
 .track-card:hover { border-color: var(--accent); }
+.track-card.track-missing { opacity: 0.5; border-color: var(--danger); }
+.track-card.track-missing:hover { border-color: var(--danger); }
+.missing-badge {
+  position: absolute; top: 6px; left: 6px;
+  background: var(--danger); color: #fff;
+  font-size: 10px; font-weight: 700;
+  padding: 2px 6px; border-radius: 4px;
+  pointer-events: none;
+}
+.track-card { position: relative; }
 
 .track-card .card-thumb {
   width: 100%;
@@ -1173,6 +1183,80 @@ details[open] .parse-tracklist-summary::before { content: "▾"; }
   flex-shrink: 0;
 }
 .job-dismiss:hover { color: var(--text); }
+
+/* ── Settings view ────────────────────────────────────────────────────────── */
+#settings-view {
+  display: none;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+}
+#settings-view.active { display: flex; }
+
+.settings-section {
+  padding: 20px;
+  border-bottom: 1px solid var(--border);
+}
+.settings-section h2 {
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--text-dim);
+  margin-bottom: 10px;
+}
+.settings-hint {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-bottom: 12px;
+}
+
+.quality-options { display: flex; flex-direction: column; gap: 8px; }
+.quality-option {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.quality-label { font-weight: 600; min-width: 70px; }
+.quality-desc  { font-size: 11px; color: var(--text-dim); }
+
+.bg-task-label     { font-size: 12px; color: var(--text-dim); }
+.bg-task-label.dim { opacity: .5; }
+.bg-task-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 4px;
+  padding-left: 4px;
+}
+.bg-task-row { min-height: 20px; }
+
+.log-panel {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  font-family: monospace;
+  font-size: 11px;
+  max-height: 300px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.log-line { color: var(--text-dim); white-space: pre-wrap; word-break: break-all; }
+
+/* ── Missing / repairing track badges ────────────────────────────────────── */
+.track-card.track-repairing { border-color: #a07020; }
+.track-card.track-repairing:hover { border-color: #c09030; }
+.repairing-badge { background: #a07020 !important; }
+
+/* card-actions disabled state */
+.card-actions button:disabled { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
 
 /* ── Mobile ───────────────────────────────────────────────────────────────── */
 @media (max-width: 600px) {

@@ -4,12 +4,26 @@
 // Audio engine
 // ---------------------------------------------------------------------------
 
-const audioCtx  = new (window.AudioContext || window.webkitAudioContext)();
-const masterGain = audioCtx.createGain();
-masterGain.connect(audioCtx.destination);
+// Audio is routed through HTMLAudioElement directly (no Web Audio graph) so that
+// iOS continues playback in background — createMediaElementSource ties audio to
+// the AudioContext which iOS suspends when the browser is backgrounded.
+let masterVolume = 1.0;
 
-function resumeCtx() {
-  if (audioCtx.state === "suspended") audioCtx.resume();
+function effectiveVol(node) {
+  return Math.min(1, node._targetVolume * (node.zone === "queue" ? queueMasterVolume : 1) * masterVolume);
+}
+
+
+function setupMediaSession() {
+  if (!("mediaSession" in navigator)) return;
+  navigator.mediaSession.setActionHandler("play",  () => { if ( globalPaused) toggleGlobalPlayback(); });
+  navigator.mediaSession.setActionHandler("pause", () => { if (!globalPaused) toggleGlobalPlayback(); });
+  navigator.mediaSession.setActionHandler("stop",  () => { if (!globalPaused) toggleGlobalPlayback(); });
+}
+
+function syncMediaSession() {
+  if (!("mediaSession" in navigator)) return;
+  navigator.mediaSession.playbackState = globalPaused ? "paused" : "playing";
 }
 
 // ---------------------------------------------------------------------------
@@ -29,6 +43,9 @@ const ICON_QUEUE = `<svg width="18" height="12" viewBox="0 0 18 12" fill="curren
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
+
+// Tracks currently being repair-downloaded (from sanity check)
+const _repairingTracks = new Set();
 
 // activeTracks: Map<slotId, TrackNode>
 // Bed slotId = trackId OR trackId-seg-SafeName  (deduplicated)
@@ -161,7 +178,8 @@ function switchView(name) {
     b.classList.toggle("active", b.dataset.view === name));
   document.querySelectorAll(".view").forEach(v =>
     v.classList.toggle("active", v.id === name + "-view"));
-  if (name === "stats") loadStats();
+  if (name === "stats")     loadStats();
+  if (name === "settings")  loadSettingsView();
 }
 
 document.querySelectorAll("nav button[data-view]").forEach(btn =>
@@ -222,8 +240,10 @@ function makeGroupHeader(label) {
 }
 
 function makeCard(track) {
+  const isRepairing = _repairingTracks.has(track.id);
+  const isMissing   = track.has_audio === false && !isRepairing;
   const card = document.createElement("div");
-  card.className = "track-card";
+  card.className = "track-card" + (isMissing ? " track-missing" : isRepairing ? " track-repairing" : "");
   card.dataset.id = track.id;
 
   const thumbUrl = track.thumbnail ? `/api/tracks/${track.id}/thumbnail` : null;
@@ -254,9 +274,10 @@ function makeCard(track) {
           <button class="seg-extract-add" data-zone="queue" data-seg-name="${esc(s.name)}" title="Add to Queue">${ICON_QUEUE}</button>
         </div>`).join("")}</div>` : ""}
     </div>
+    ${isRepairing ? `<div class="missing-badge repairing-badge">⬇ Redownloading…</div>` : isMissing ? `<div class="missing-badge">⚠ Audio missing</div>` : ""}
     <div class="card-actions">
-      <button data-action="bed"   title="Add to Beds — loops continuously">${ICON_BED} Bed</button>
-      <button data-action="queue" title="Add to Queue — plays in sequence">${ICON_QUEUE} Queue</button>
+      <button data-action="bed"   title="Add to Beds — loops continuously" ${(isMissing || isRepairing) ? "disabled" : ""}>${ICON_BED} Bed</button>
+      <button data-action="queue" title="Add to Queue — plays in sequence" ${(isMissing || isRepairing) ? "disabled" : ""}>${ICON_QUEUE} Queue</button>
       <button data-action="edit"  title="Edit metadata">✎</button>
       <button data-action="delete" class="danger card-delete" title="Delete track">🗑</button>
     </div>
@@ -324,44 +345,73 @@ document.getElementById("lib-sort").addEventListener("change", e => {
 // ---------------------------------------------------------------------------
 
 function addToMixer(track, segment = null, zone = "bed") {
-  resumeCtx();
   // Beds deduplicate (same track can't loop twice); queue allows repeats
   const baseSlotId = slotIdFor(track.id, segment?.name);
   const slotId     = zone === "queue" ? `${baseSlotId}-q${++_queueSlotSeq}` : baseSlotId;
   if (zone === "bed" && activeTracks.has(slotId)) { toast("Already in beds"); return; }
 
-  const audioEl    = new Audio(`/api/tracks/${track.id}/audio`);
-  audioEl.crossOrigin = "anonymous";
-  const sourceNode = audioCtx.createMediaElementSource(audioEl);
-  const gainNode   = audioCtx.createGain();
-  const initVol    = zone === "queue" ? 0.8 * queueMasterVolume : 0.8;
-  gainNode.gain.value = initVol;
-  sourceNode.connect(gainNode);
-  gainNode.connect(masterGain);
+  const audioEl = new Audio(`/api/tracks/${track.id}/audio`);
+  audioEl.volume = Math.min(1, (zone === "queue" ? 0.8 * queueMasterVolume : 0.8) * masterVolume);
 
   const node = {
     meta: track, segment, zone,
-    audioEl, sourceNode, gainNode,
+    audioEl,
     _targetVolume: 0.8,
     sessionStart: isoNow(),
     _timeUpdateHandler: null,
   };
 
+  // Helper: seek to a position reliably (waits for metadata + seeked event)
+  const seekTo = (time, cb) => {
+    const go = () => {
+      if (time > 0) {
+        audioEl.currentTime = time;
+        audioEl.addEventListener("seeked", () => {
+          // Wait until data at the target position is actually buffered
+          if (audioEl.readyState >= 3) { cb(); return; }
+          audioEl.addEventListener("canplay", cb, { once: true });
+        }, { once: true });
+      } else {
+        audioEl.currentTime = 0;
+        cb();
+      }
+    };
+    if (audioEl.readyState >= 1) go();
+    else audioEl.addEventListener("loadedmetadata", go, { once: true });
+  };
+
   if (zone === "bed") {
     audioEl.loop = !segment;
-    audioEl.currentTime = segment?.start || 0;
-    if (!globalPaused) audioEl.play().catch(() => {});
-    globalPaused = false;
+    const wasEmpty = activeTracks.size === 0 && sequenceOrder.length === 0;
+    const startBed = () => {
+      if (!globalPaused || wasEmpty) {
+        audioEl.play().then(() => {
+          globalPaused = false;
+          syncMediaSession();
+          updateTransportLabel();
+          const pb = document.querySelector(`#mtrack-${CSS.escape(slotId)} .play-btn`);
+          if (pb) { pb.textContent = "⏸"; pb.dataset.playing = "true"; pb.classList.remove("paused"); }
+        }).catch(() => {});
+      }
+    };
+    seekTo(segment?.start || 0, startBed);
   } else {
-    // Queue: play immediately only if first item; otherwise queue it
+    // Queue: play immediately only if first item; otherwise just position it
     audioEl.loop = false;
-    audioEl.currentTime = segment?.start || 0;
     const isFirst = sequenceOrder.length === 0;
     sequenceOrder.push(slotId);
-    if (isFirst && !globalPaused || isFirst && activeTracks.size === 0) {
+    if (isFirst && (!globalPaused || activeTracks.size === 0)) {
       currentQueueIdx = 0;
-      globalPaused = false;
-      audioEl.play().catch(() => {});
+      const startQueue = () => {
+        audioEl.play().then(() => {
+          globalPaused = false;
+          syncMediaSession();
+          updateTransportLabel();
+        }).catch(() => {});
+      };
+      seekTo(segment?.start || 0, startQueue);
+    } else {
+      seekTo(segment?.start || 0, () => {});
     }
   }
 
@@ -389,7 +439,6 @@ function removeFromMixer(slotId) {
   if (node._timeUpdateHandler) {
     node.audioEl.removeEventListener("timeupdate", node._timeUpdateHandler);
   }
-  node.gainNode.disconnect();
   activeTracks.delete(slotId);
 
   if (node.zone === "queue") {
@@ -449,9 +498,15 @@ function updateSeekDisplay(slotId, node) {
   const timeEl = el.querySelector(".time-display");
   if (!slider || slider.dataset.seeking === "1") return;
 
-  slider.value = (node.audioEl.currentTime / node.audioEl.duration) * 1000;
+  const seg = node.segment;
+  if (seg) {
+    const elapsed = node.audioEl.currentTime - seg.start;
+    const segDur  = seg.end - seg.start;
+    slider.value  = Math.max(0, Math.min(1000, (elapsed / segDur) * 1000));
+  } else {
+    slider.value = (node.audioEl.currentTime / node.audioEl.duration) * 1000;
+  }
   if (timeEl) {
-    const seg   = node.segment;
     const cur   = seg ? Math.max(0, node.audioEl.currentTime - seg.start) : node.audioEl.currentTime;
     const total = seg ? seg.end - seg.start : node.audioEl.duration;
     timeEl.textContent = `${fmt(cur)} / ${fmt(total)}`;
@@ -493,7 +548,7 @@ function renderMixerTrack(slotId) {
         <input type="range" class="seek-slider" min="0" max="1000" value="0">
       </div>
       <div class="mixer-track-row">
-        <button class="play-btn" data-playing="true" title="Play / Pause">⏸</button>
+        <button class="play-btn${globalPaused ? " paused" : ""}" data-playing="${!globalPaused}" title="Play / Pause">${globalPaused ? "▶" : "⏸"}</button>
         <input type="range" class="vol-slider" min="0" max="1" step="0.01" value="0.8" title="Volume">
         ${zone === "bed"
           ? `<button class="toggle-btn on" data-loop="true" title="Loop">🔁</button>`
@@ -570,8 +625,9 @@ function renderMixerTrack(slotId) {
       node.audioEl.pause();
       playBtn.dataset.playing = "false"; playBtn.textContent = "▶"; playBtn.classList.add("paused");
     } else {
-      resumeCtx(); node.audioEl.play().catch(() => {});
+      node.audioEl.play().catch(() => {});
       playBtn.dataset.playing = "true"; playBtn.textContent = "⏸"; playBtn.classList.remove("paused");
+      if (globalPaused) { globalPaused = false; syncMediaSession(); updateTransportLabel(); }
     }
   });
 
@@ -588,17 +644,18 @@ function renderMixerTrack(slotId) {
   seekSlider.addEventListener("change", () => {
     seekSlider.dataset.seeking = "";
     if (!node.audioEl.duration) return;
-    const target = (parseFloat(seekSlider.value) / 1000) * node.audioEl.duration;
-    node.audioEl.currentTime = node.segment
-      ? Math.min(Math.max(target, node.segment.start), node.segment.end - 0.5)
-      : target;
+    const pct = parseFloat(seekSlider.value) / 1000;
+    const seg = node.segment;
+    node.audioEl.currentTime = seg
+      ? seg.start + pct * (seg.end - seg.start)
+      : pct * node.audioEl.duration;
   });
 
   // — Volume
   const volSlider = div.querySelector(".vol-slider");
   volSlider.addEventListener("input", () => {
     node._targetVolume = parseFloat(volSlider.value);
-    node.gainNode.gain.value = node._targetVolume * (zone === "queue" ? queueMasterVolume : 1);
+    node.audioEl.volume = effectiveVol(node);
   });
 
   // — Loop (bed only)
@@ -652,20 +709,36 @@ function playQueueItem(idx) {
   currentQueueIdx = idx;
   const node = activeTracks.get(sequenceOrder[idx]);
   if (!node) return;
-  node.audioEl.currentTime = node.segment?.start || 0;
-  node.audioEl.play().catch(() => {});
+  const target = node.segment?.start || 0;
+  const doPlay = () => node.audioEl.play().catch(() => {});
+  if (target > 0 && node.audioEl.readyState >= 1) {
+    node.audioEl.currentTime = target;
+    node.audioEl.addEventListener("seeked", doPlay, { once: true });
+  } else {
+    node.audioEl.currentTime = target;
+    doPlay();
+  }
   updateQueueHighlight();
 }
 
 function jumpToQueueItem(idx) {
-  const from = activeTracks.get(sequenceOrder[currentQueueIdx]);
-  const to   = activeTracks.get(sequenceOrder[idx]);
+  const from   = activeTracks.get(sequenceOrder[currentQueueIdx]);
+  const to     = activeTracks.get(sequenceOrder[idx]);
   if (!to) return;
-  to.audioEl.currentTime = to.segment?.start || 0;
-  to.audioEl.play().catch(() => {});
-  if (from && from !== to) crossfadeNodes(from, to, CROSSFADE_S);
-  currentQueueIdx = idx;
-  updateQueueHighlight();
+  const target = to.segment?.start || 0;
+  const doJump = () => {
+    to.audioEl.play().catch(() => {});
+    if (from && from !== to) crossfadeNodes(from, to, CROSSFADE_S);
+    currentQueueIdx = idx;
+    updateQueueHighlight();
+  };
+  if (target > 0 && to.audioEl.readyState >= 1) {
+    to.audioEl.currentTime = target;
+    to.audioEl.addEventListener("seeked", doJump, { once: true });
+  } else {
+    to.audioEl.currentTime = target;
+    doJump();
+  }
 }
 
 function advanceQueue(finishedSlotId) {
@@ -683,25 +756,39 @@ function advanceQueue(finishedSlotId) {
   const to       = activeTracks.get(toSlotId);
   if (!to) return;
 
-  to.audioEl.currentTime = to.segment?.start || 0;
-  to.audioEl.play().catch(() => {});
-  crossfadeNodes(from, to, CROSSFADE_S);
-  currentQueueIdx = nextIdx;
-  updateQueueHighlight();
+  const toTarget = to.segment?.start || 0;
+  const doAdvance = () => {
+    to.audioEl.play().catch(() => {});
+    crossfadeNodes(from, to, CROSSFADE_S);
+    currentQueueIdx = nextIdx;
+    updateQueueHighlight();
+  };
+  if (toTarget > 0 && to.audioEl.readyState >= 1) {
+    to.audioEl.currentTime = toTarget;
+    to.audioEl.addEventListener("seeked", doAdvance, { once: true });
+  } else {
+    to.audioEl.currentTime = toTarget;
+    doAdvance();
+  }
 }
 
 function crossfadeNodes(from, to, dur) {
-  const now = audioCtx.currentTime;
-  if (from) {
-    from.gainNode.gain.cancelScheduledValues(now);
-    from.gainNode.gain.setValueAtTime(from.gainNode.gain.value, now);
-    from.gainNode.gain.exponentialRampToValueAtTime(0.001, now + dur);
-    from.gainNode.gain.setValueAtTime(0, now + dur);
-  }
-  const toVol = (to._targetVolume || 0.8) * (to.zone === "queue" ? queueMasterVolume : 1);
-  to.gainNode.gain.cancelScheduledValues(now);
-  to.gainNode.gain.setValueAtTime(0.001, now);
-  to.gainNode.gain.exponentialRampToValueAtTime(toVol, now + dur);
+  const steps      = Math.max(10, Math.ceil(dur * 20));
+  const stepMs     = (dur * 1000) / steps;
+  const fromStart  = from ? from.audioEl.volume : 0;
+  const toTarget   = effectiveVol(to);
+  let step = 0;
+  const timer = setInterval(() => {
+    step++;
+    const t = step / steps;
+    if (from) from.audioEl.volume = Math.max(0, fromStart * (1 - t));
+    to.audioEl.volume = Math.min(toTarget, toTarget * t);
+    if (step >= steps) {
+      clearInterval(timer);
+      if (from) from.audioEl.volume = 0;
+      to.audioEl.volume = toTarget;
+    }
+  }, stepMs);
 }
 
 function updateQueueHighlight() {
@@ -775,10 +862,7 @@ document.getElementById("queue-loop-btn").addEventListener("click", () => {
 document.getElementById("queue-master-vol").addEventListener("input", e => {
   queueMasterVolume = parseFloat(e.target.value);
   for (const [, node] of activeTracks) {
-    if (node.zone === "queue") {
-      node.gainNode.gain.cancelScheduledValues(audioCtx.currentTime);
-      node.gainNode.gain.value = node._targetVolume * queueMasterVolume;
-    }
+    if (node.zone === "queue") node.audioEl.volume = effectiveVol(node);
   }
 });
 
@@ -795,12 +879,11 @@ function updateTransportLabel() {
   const el = document.getElementById("transport-label");
   if (el) el.textContent = parts.length ? parts.join(", ") : "No tracks";
   const btn = document.getElementById("transport-play");
-  if (btn) btn.textContent = globalPaused ? "▶" : "⏸";
+  if (btn) btn.textContent = (globalPaused || activeTracks.size === 0) ? "▶" : "⏸";
 }
 
 function toggleGlobalPlayback() {
   if (activeTracks.size === 0) return;
-  resumeCtx();
   globalPaused = !globalPaused;
 
   for (const [slotId, node] of activeTracks) {
@@ -826,12 +909,14 @@ function toggleGlobalPlayback() {
 
   updateQueueHighlight();
   updateTransportLabel();
+  syncMediaSession();
 }
 
 document.getElementById("transport-play").addEventListener("click", toggleGlobalPlayback);
 
 document.getElementById("master-vol").addEventListener("input", e => {
-  masterGain.gain.value = parseFloat(e.target.value);
+  masterVolume = parseFloat(e.target.value);
+  for (const [, node] of activeTracks) node.audioEl.volume = effectiveVol(node);
 });
 
 document.addEventListener("keydown", e => {
@@ -887,7 +972,7 @@ async function applyPreset(preset) {
     if (!newSlotId) continue;
     const node = activeTracks.get(newSlotId);
     node._targetVolume = entry.volume ?? 0.8;
-    node.gainNode.gain.value = node._targetVolume * (node.zone === "queue" ? queueMasterVolume : 1);
+    node.audioEl.volume = effectiveVol(node);
     const vs = document.querySelector(`#mtrack-${CSS.escape(newSlotId)} .vol-slider`);
     if (vs) vs.value = entry.volume ?? 0.8;
   }
@@ -926,7 +1011,7 @@ document.getElementById("save-preset-btn").addEventListener("click", async () =>
     tracks.push({
       track_id: node.meta.id,
       segment:  node.segment || null,
-      volume:   node._targetVolume || node.gainNode.gain.value,
+      volume:   node._targetVolume,
       zone:     node.zone || "bed",
     });
   }
@@ -1077,6 +1162,7 @@ function openTrackModal(track) {
   const lbl = document.getElementById("edit-custom-label");
   lbl.oninput = syncOriginalsDim;
   editingSegIdx = -1;
+  initThumbEdit(track);
   // Reset parse-tracklist section
   document.getElementById("tracklist-paste").value = "";
   document.getElementById("parse-tracklist-status").textContent = "";
@@ -1415,13 +1501,163 @@ function renderStatsTable(id, rows, mapper) {
 }
 
 // ---------------------------------------------------------------------------
+// Settings view
+// ---------------------------------------------------------------------------
+
+let _settingsPollTimer = null;
+
+async function loadSettingsView() {
+  try {
+    const s = await api("GET", "/settings");
+    const radios = document.querySelectorAll('input[name="quality"]');
+    radios.forEach(r => { r.checked = r.value === s.audio_quality; });
+  } catch { /* non-fatal */ }
+  await refreshBgTasks();
+  await refreshLogs();
+}
+
+async function refreshBgTasks() {
+  try {
+    const [conv, jobs] = await Promise.all([
+      api("GET", "/conversions"),
+      api("GET", "/jobs"),
+    ]);
+
+    const convEl = document.getElementById("bg-conversions");
+    if (conv.queued > 0 || conv.running) {
+      convEl.innerHTML = `<span class="bg-task-label">MP3→M4A conversions: ${conv.running ? "running" : "queued"} (${conv.converting_ids.length} track${conv.converting_ids.length !== 1 ? "s" : ""})</span>`;
+    } else {
+      convEl.innerHTML = `<span class="bg-task-label dim">No active conversions</span>`;
+    }
+
+    const dlEl  = document.getElementById("bg-downloads");
+    const active = Object.values(jobs).filter(j => j.status === "queued" || j.status === "running");
+    if (active.length) {
+      dlEl.innerHTML = `<span class="bg-task-label">Downloads in progress: ${active.length}</span>` +
+        active.map(j => `<div class="bg-task-item"><span class="spinner" style="width:12px;height:12px;border-width:1.5px"></span> ${esc((j.track?.title || j.url || "").slice(0, 60))}</div>`).join("");
+    } else {
+      dlEl.innerHTML = `<span class="bg-task-label dim">No active downloads</span>`;
+    }
+  } catch { /* non-fatal */ }
+}
+
+async function refreshLogs() {
+  try {
+    const logs = await api("GET", "/logs");
+    const panel = document.getElementById("log-panel");
+    if (!logs.length) {
+      panel.textContent = "No log entries yet.";
+      return;
+    }
+    panel.innerHTML = logs.slice().reverse().map(l => `<div class="log-line">${esc(l)}</div>`).join("");
+  } catch { /* non-fatal */ }
+}
+
+document.getElementById("save-quality-btn").addEventListener("click", async () => {
+  const val = document.querySelector('input[name="quality"]:checked')?.value;
+  if (!val) return;
+  try {
+    await api("POST", "/settings", { audio_quality: val });
+    const msg = document.getElementById("quality-saved-msg");
+    msg.style.display = "inline";
+    setTimeout(() => { msg.style.display = "none"; }, 2000);
+  } catch (err) { toast(err.message, true); }
+});
+
+document.getElementById("refresh-bg-btn").addEventListener("click",   refreshBgTasks);
+document.getElementById("refresh-logs-btn").addEventListener("click",  refreshLogs);
+
+// ---------------------------------------------------------------------------
+// Custom thumbnail (edit modal)
+// ---------------------------------------------------------------------------
+
+function initThumbEdit(track) {
+  const img         = document.getElementById("thumb-preview-img");
+  const placeholder = document.getElementById("thumb-preview-placeholder");
+  const uploadBtn   = document.getElementById("upload-thumb-btn");
+  const removeBtn   = document.getElementById("remove-thumb-btn");
+  const fileInput   = document.getElementById("thumb-file-input");
+
+  const hasThumbnail = track.thumbnail || track.has_custom_thumbnail;
+  if (hasThumbnail) {
+    img.src = `/api/tracks/${track.id}/thumbnail?t=${Date.now()}`;
+    img.style.display = "block";
+    placeholder.style.display = "none";
+  } else {
+    img.style.display = "none";
+    placeholder.style.display = "flex";
+  }
+  removeBtn.style.display = track.has_custom_thumbnail ? "inline-flex" : "none";
+
+  // Clone to strip old listeners
+  const freshUpload = uploadBtn.cloneNode(true);
+  const freshRemove = removeBtn.cloneNode(true);
+  const freshInput  = fileInput.cloneNode(true);
+  uploadBtn.replaceWith(freshUpload);
+  removeBtn.replaceWith(freshRemove);
+  fileInput.replaceWith(freshInput);
+
+  freshUpload.addEventListener("click", () => freshInput.click());
+  freshInput.addEventListener("change", async () => {
+    if (!freshInput.files.length) return;
+    const form = new FormData();
+    form.append("file", freshInput.files[0]);
+    try {
+      await fetch(`/api/tracks/${track.id}/thumbnail/custom`, { method: "POST", body: form });
+      img.src = `/api/tracks/${track.id}/thumbnail?t=${Date.now()}`;
+      img.style.display = "block";
+      placeholder.style.display = "none";
+      freshRemove.style.display = "inline-flex";
+      // update library in memory
+      const libTrack = library.find(t => t.id === track.id);
+      if (libTrack) libTrack.has_custom_thumbnail = true;
+      renderLibrary();
+      toast("Custom thumbnail saved");
+    } catch (err) { toast(err.message, true); }
+  });
+  freshRemove.addEventListener("click", async () => {
+    try {
+      await api("DELETE", `/tracks/${track.id}/thumbnail/custom`);
+      freshRemove.style.display = "none";
+      // Revert to original thumbnail or placeholder
+      const libTrack = library.find(t => t.id === track.id);
+      if (libTrack) libTrack.has_custom_thumbnail = false;
+      if (track.thumbnail) {
+        img.src = `/api/tracks/${track.id}/thumbnail?t=${Date.now()}`;
+      } else {
+        img.style.display = "none";
+        placeholder.style.display = "flex";
+      }
+      renderLibrary();
+      toast("Custom thumbnail removed");
+    } catch (err) { toast(err.message, true); }
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
 
 (async () => {
+  setupMediaSession();
   initQueueDrag();
   await loadLibrary();
   await loadPresets();
+  // Sanity check: flag / repair tracks with missing audio
+  try {
+    const result = await api("POST", "/admin/sanity");
+    if (result.redownloading_ids?.length) {
+      result.redownloading_ids.forEach(id => _repairingTracks.add(id));
+      renderLibrary();
+      toast(`Redownloading ${result.redownloading} track${result.redownloading > 1 ? "s" : ""} with missing audio`);
+    }
+    if (result.converting > 0) {
+      toast(`Converting ${result.converting} track${result.converting > 1 ? "s" : ""} to M4A`);
+    }
+    if (result.missing_no_source?.length) {
+      toast(`${result.missing_no_source.length} track${result.missing_no_source.length > 1 ? "s" : ""} missing audio — check library`, true);
+    }
+  } catch { /* non-fatal */ }
   updateZoneEmpty();
   updateTransportLabel();
   switchView("mixer");

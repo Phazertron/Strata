@@ -27,6 +27,7 @@
       <button data-view="mixer"   class="active">Mixer</button>
       <button data-view="library">Library</button>
       <button data-view="stats">Stats</button>
+      <button data-view="settings" title="Settings">⚙</button>
     </nav>
   </header>
 
@@ -93,6 +94,38 @@
         <button id="add-track-btn">＋ Add track</button>
       </div>
       <div id="library-grid"></div>
+    </div>
+
+    <!-- ── Settings view ─────────────────────────────────────────────────── -->
+    <div id="settings-view" class="view">
+
+      <div class="settings-section">
+        <h2>Audio quality</h2>
+        <p class="settings-hint">Applies to new downloads and MP3 → M4A conversions. Already-converted files are unaffected.</p>
+        <div class="quality-options" id="quality-options">
+          <label class="quality-option"><input type="radio" name="quality" value="128k"> <span class="quality-label">128 kbps</span> <span class="quality-desc">Smaller files, fine for ambient tracks</span></label>
+          <label class="quality-option"><input type="radio" name="quality" value="192k"> <span class="quality-label">192 kbps</span> <span class="quality-desc">Recommended — noticeable improvement</span></label>
+          <label class="quality-option"><input type="radio" name="quality" value="320k"> <span class="quality-label">320 kbps</span> <span class="quality-desc">Maximum quality, largest files</span></label>
+        </div>
+        <div style="margin-top:12px;display:flex;align-items:center;gap:10px">
+          <button id="save-quality-btn" class="btn">Save</button>
+          <span id="quality-saved-msg" style="font-size:12px;color:var(--success);display:none">✓ Saved</span>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <h2>Background tasks</h2>
+        <div id="bg-conversions" class="bg-task-row"></div>
+        <div id="bg-downloads"   class="bg-task-row" style="margin-top:6px"></div>
+        <button id="refresh-bg-btn" class="btn secondary" style="margin-top:10px;font-size:12px">↺ Refresh</button>
+      </div>
+
+      <div class="settings-section">
+        <h2>Logs</h2>
+        <div id="log-panel" class="log-panel"></div>
+        <button id="refresh-logs-btn" class="btn secondary" style="margin-top:8px;font-size:12px">↺ Refresh</button>
+      </div>
+
     </div>
 
     <!-- ── Stats view ───────────────────────────────────────────────────── -->
@@ -205,6 +238,20 @@
         <input id="edit-moods" class="text-input" type="text" placeholder="focus, rain, sleep" autocomplete="off">
         <div id="tag-suggestions" class="tag-suggestions" style="display:none"></div>
       </div>
+    </div>
+
+    <!-- Thumbnail -->
+    <div id="thumb-edit-row" style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius)">
+      <img id="thumb-preview-img" src="" alt="" style="width:64px;height:36px;object-fit:cover;border-radius:4px;background:var(--border);display:none">
+      <div id="thumb-preview-placeholder" style="width:64px;height:36px;border-radius:4px;background:var(--border);display:flex;align-items:center;justify-content:center;font-size:18px;color:var(--text-dim)">♫</div>
+      <div style="flex:1">
+        <div style="font-size:11px;color:var(--text-dim);margin-bottom:6px">Thumbnail</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button id="upload-thumb-btn" class="btn secondary" style="font-size:11px;padding:4px 10px">Upload custom</button>
+          <button id="remove-thumb-btn" class="btn secondary danger" style="font-size:11px;padding:4px 10px;display:none">Remove custom</button>
+        </div>
+      </div>
+      <input id="thumb-file-input" type="file" accept="image/*" style="display:none">
     </div>
 
     <div style="margin-top:14px">

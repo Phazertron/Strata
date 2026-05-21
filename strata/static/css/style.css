@@ -69,6 +69,17 @@ header {
   transition: background 0.15s;
 }
 .transport-btn:hover { background: var(--accent2); }
+.transport-btn.skip {
+  width: 26px;
+  height: 26px;
+  font-size: 13px;
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+.transport-btn.skip:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+.transport-btn.skip:disabled { opacity: 0.3; cursor: not-allowed; }
+.transport-btn.skip:disabled:hover { background: var(--surface2); color: var(--text); border-color: var(--border); }
 
 #transport-label {
   font-size: 11px;

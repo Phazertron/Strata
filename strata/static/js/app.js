@@ -524,6 +524,14 @@ function updateSeekDisplay(slotId, node) {
     const total = seg ? seg.end - seg.start : node.audioEl.duration;
     timeEl.textContent = `${fmt(cur)} / ${fmt(total)}`;
   }
+
+  // Live segment chip highlight for whole-track beds
+  if (node.zone === "bed" && !node.segment && node.meta.segments?.length) {
+    const t = node.audioEl.currentTime;
+    const activeSeg = node.meta.segments.find(s => t >= s.start && t < s.end);
+    document.querySelectorAll(`#mtrack-${slotId} .seg-chip`).forEach(chip =>
+      chip.classList.toggle("active", chip.dataset.segName === (activeSeg?.name ?? "")));
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -564,7 +572,11 @@ function renderMixerTrack(slotId) {
         <button class="play-btn${globalPaused ? " paused" : ""}" data-playing="${!globalPaused}" title="Play / Pause">${globalPaused ? "▶" : "⏸"}</button>
         <input type="range" class="vol-slider" min="0" max="1" step="0.01" value="0.8" title="Volume">
         ${zone === "bed"
-          ? `<button class="toggle-btn on" data-loop="true" title="Loop">🔁</button>`
+          ? `<button class="toggle-btn on" data-loop="true" title="Loop">🔁</button>
+             ${meta.segments?.length > 1
+               ? `<button class="toggle-btn" data-action="seg-prev" title="Previous segment">‹</button>
+                  <button class="toggle-btn" data-action="seg-next" title="Next segment">›</button>`
+               : ''}`
           : `<span class="queue-num"></span>`}
         <button class="toggle-btn" data-action="edit-segs" title="Edit segments">✎</button>
         <button class="toggle-btn" data-action="remove" style="margin-left:auto" title="Remove">✕</button>
@@ -683,6 +695,33 @@ function renderMixerTrack(slotId) {
     });
   }
 
+  // — Segment prev/next (bed with multiple segments)
+  if (zone === "bed" && meta.segments?.length > 1) {
+    const segs = meta.segments;
+    const findSegIdx = () => {
+      const t = node.audioEl.currentTime;
+      let idx = segs.findIndex(s => t >= s.start && t < s.end);
+      if (idx < 0) idx = t >= segs[segs.length - 1].end ? segs.length - 1 : 0;
+      return idx;
+    };
+    const activateChip = seg => {
+      document.querySelectorAll(`#mtrack-${slotId} .seg-chip`).forEach(c =>
+        c.classList.toggle("active", c.dataset.segName === seg.name));
+    };
+    div.querySelector("[data-action=seg-prev]")?.addEventListener("click", () => {
+      const idx = findSegIdx();
+      const seg = segs[idx > 0 ? idx - 1 : segs.length - 1];
+      node.audioEl.currentTime = seg.start;
+      activateChip(seg);
+    });
+    div.querySelector("[data-action=seg-next]")?.addEventListener("click", () => {
+      const idx = findSegIdx();
+      const seg = segs[idx < segs.length - 1 ? idx + 1 : 0];
+      node.audioEl.currentTime = seg.start;
+      activateChip(seg);
+    });
+  }
+
   // — Segment chips (bed, whole track)
   div.querySelectorAll(".seg-chip").forEach(chip => {
     const s = meta.segments?.find(x => x.name === chip.dataset.segName);
@@ -754,6 +793,43 @@ function jumpToQueueItem(idx) {
   }
 }
 
+const PREV_RESTART_THRESHOLD = 3; // seconds — restart current track instead of going back
+
+function skipQueuePrev() {
+  if (currentQueueIdx < 0 || sequenceOrder.length === 0) return;
+  const node = activeTracks.get(sequenceOrder[currentQueueIdx]);
+  const startTime = node?.segment?.start || 0;
+  if (node && node.audioEl.currentTime - startTime > PREV_RESTART_THRESHOLD) {
+    node.audioEl.currentTime = startTime;
+    return;
+  }
+  let prevIdx = currentQueueIdx - 1;
+  if (prevIdx < 0) {
+    if (!queueLooping) return;
+    prevIdx = sequenceOrder.length - 1;
+  }
+  jumpToQueueItem(prevIdx);
+}
+
+function skipQueueNext() {
+  if (currentQueueIdx < 0 || sequenceOrder.length === 0) return;
+  let nextIdx = currentQueueIdx + 1;
+  if (nextIdx >= sequenceOrder.length) {
+    if (!queueLooping) return;
+    nextIdx = 0;
+  }
+  jumpToQueueItem(nextIdx);
+}
+
+function updateTransportNav() {
+  const prevBtn = document.getElementById("transport-prev");
+  const nextBtn = document.getElementById("transport-next");
+  if (!prevBtn || !nextBtn) return;
+  const hasQueue = sequenceOrder.length > 0;
+  prevBtn.disabled = !hasQueue || (currentQueueIdx <= 0 && !queueLooping);
+  nextBtn.disabled = !hasQueue || (currentQueueIdx >= sequenceOrder.length - 1 && !queueLooping);
+}
+
 function advanceQueue(finishedSlotId) {
   const idx = sequenceOrder.indexOf(finishedSlotId);
   if (idx < 0 || idx !== currentQueueIdx) return;
@@ -822,6 +898,7 @@ function updateQueueHighlight() {
     const badge = el.querySelector(".queue-num");
     if (badge) badge.textContent = `#${i + 1}`;
   });
+  updateTransportNav();
 }
 
 // Drag-to-reorder queue
@@ -893,6 +970,7 @@ function updateTransportLabel() {
   if (el) el.textContent = parts.length ? parts.join(", ") : "No tracks";
   const btn = document.getElementById("transport-play");
   if (btn) btn.textContent = (globalPaused || activeTracks.size === 0) ? "▶" : "⏸";
+  updateTransportNav();
 }
 
 function toggleGlobalPlayback() {
@@ -926,6 +1004,8 @@ function toggleGlobalPlayback() {
 }
 
 document.getElementById("transport-play").addEventListener("click", toggleGlobalPlayback);
+document.getElementById("transport-prev").addEventListener("click", skipQueuePrev);
+document.getElementById("transport-next").addEventListener("click", skipQueueNext);
 
 document.getElementById("master-vol").addEventListener("input", e => {
   masterVolume = parseFloat(e.target.value);

@@ -1250,10 +1250,14 @@ details[open] .parse-tracklist-summary::before { content: "▾"; }
 }
 .log-line { color: var(--text-dim); white-space: pre-wrap; word-break: break-all; }
 
-/* ── Missing / repairing track badges ────────────────────────────────────── */
+/* ── Missing / repairing / outdated track badges ─────────────────────────── */
 .track-card.track-repairing { border-color: #a07020; }
 .track-card.track-repairing:hover { border-color: #c09030; }
 .repairing-badge { background: #a07020 !important; }
+
+.track-card.track-outdated { border-color: #b89000; }
+.track-card.track-outdated:hover { border-color: #d4b020; }
+.outdated-badge { background: #b89000 !important; }
 
 /* card-actions disabled state */
 .card-actions button:disabled { opacity: 0.35; cursor: not-allowed; pointer-events: none; }

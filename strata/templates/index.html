@@ -114,6 +114,17 @@
       </div>
 
       <div class="settings-section">
+        <h2>Library health</h2>
+        <p class="settings-hint">Runs ffprobe on every audio file to detect corrupt tracks and quality mismatches. Takes a few seconds per track.</p>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <button id="deep-check-btn" class="btn">Deep check</button>
+          <button id="upgrade-all-btn" class="btn secondary" style="display:none">↑ Upgrade all outdated</button>
+          <span id="deep-check-spinner" style="display:none"><span class="spinner"></span></span>
+        </div>
+        <div id="deep-check-results" style="margin-top:10px"></div>
+      </div>
+
+      <div class="settings-section">
         <h2>Background tasks</h2>
         <div id="bg-conversions" class="bg-task-row"></div>
         <div id="bg-downloads"   class="bg-task-row" style="margin-top:6px"></div>
@@ -254,6 +265,16 @@
       <input id="thumb-file-input" type="file" accept="image/*" style="display:none">
     </div>
 
+    <!-- Audio re-upload (shown for corrupt / quality-outdated tracks without a URL) -->
+    <div id="audio-reupload-row" style="display:none;padding:8px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius)">
+      <div style="font-size:11px;color:var(--text-dim);margin-bottom:6px" id="audio-reupload-label">Replace audio file</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button id="reupload-audio-btn" class="btn secondary" style="font-size:11px;padding:4px 10px">Upload new file</button>
+        <span id="reupload-audio-status" style="font-size:11px;color:var(--text-dim);align-self:center"></span>
+      </div>
+      <input id="audio-reupload-input" type="file" accept="audio/*" style="display:none">
+    </div>
+
     <div style="margin-top:14px">
       <div style="margin-bottom:10px">
         <span style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-dim)">Segments</span>
@@ -297,6 +318,7 @@
 
     <div class="modal-actions" style="margin-top:14px">
       <button id="save-track-btn" class="btn">Save</button>
+      <button id="refetch-audio-btn" class="btn secondary" style="display:none" title="Delete current audio and re-download from YouTube at the current quality setting">⬇ Re-fetch audio</button>
       <button id="track-modal-close" class="btn secondary">Cancel</button>
     </div>
   </div>

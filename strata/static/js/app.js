@@ -45,7 +45,10 @@ const ICON_QUEUE = `<svg width="18" height="12" viewBox="0 0 18 12" fill="curren
 // ---------------------------------------------------------------------------
 
 // Tracks currently being repair-downloaded (from sanity check)
-const _repairingTracks = new Set();
+const _repairingTracks     = new Set();
+// Tracks flagged by deep-check
+const _corruptNoSource     = new Set();
+const _qualityOutdated     = new Set();
 
 // activeTracks: Map<slotId, TrackNode>
 // Bed slotId = trackId OR trackId-seg-SafeName  (deduplicated)
@@ -240,10 +243,16 @@ function makeGroupHeader(label) {
 }
 
 function makeCard(track) {
-  const isRepairing = _repairingTracks.has(track.id);
-  const isMissing   = track.has_audio === false && !isRepairing;
+  const isRepairing  = _repairingTracks.has(track.id);
+  const isMissing    = track.has_audio === false && !isRepairing;
+  const isCorrupt    = _corruptNoSource.has(track.id);
+  const isOutdated   = _qualityOutdated.has(track.id) || track.quality_outdated;
   const card = document.createElement("div");
-  card.className = "track-card" + (isMissing ? " track-missing" : isRepairing ? " track-repairing" : "");
+  let cardClass = "track-card";
+  if (isMissing || isCorrupt) cardClass += " track-missing";
+  else if (isRepairing)       cardClass += " track-repairing";
+  else if (isOutdated)        cardClass += " track-outdated";
+  card.className = cardClass;
   card.dataset.id = track.id;
 
   const thumbUrl = track.thumbnail ? `/api/tracks/${track.id}/thumbnail` : null;
@@ -274,10 +283,14 @@ function makeCard(track) {
           <button class="seg-extract-add" data-zone="queue" data-seg-name="${esc(s.name)}" title="Add to Queue">${ICON_QUEUE}</button>
         </div>`).join("")}</div>` : ""}
     </div>
-    ${isRepairing ? `<div class="missing-badge repairing-badge">⬇ Redownloading…</div>` : isMissing ? `<div class="missing-badge">⚠ Audio missing</div>` : ""}
+    ${isRepairing ? `<div class="missing-badge repairing-badge">⬇ Redownloading…</div>`
+      : isCorrupt  ? `<div class="missing-badge">✗ Corrupt</div>`
+      : isMissing  ? `<div class="missing-badge">⚠ Audio missing</div>`
+      : isOutdated ? `<div class="missing-badge outdated-badge">↑ Quality outdated</div>`
+      : ""}
     <div class="card-actions">
-      <button data-action="bed"   title="Add to Beds — loops continuously" ${(isMissing || isRepairing) ? "disabled" : ""}>${ICON_BED} Bed</button>
-      <button data-action="queue" title="Add to Queue — plays in sequence" ${(isMissing || isRepairing) ? "disabled" : ""}>${ICON_QUEUE} Queue</button>
+      <button data-action="bed"   title="Add to Beds — loops continuously" ${(isMissing || isRepairing || isCorrupt) ? "disabled" : ""}>${ICON_BED} Bed</button>
+      <button data-action="queue" title="Add to Queue — plays in sequence" ${(isMissing || isRepairing || isCorrupt) ? "disabled" : ""}>${ICON_QUEUE} Queue</button>
       <button data-action="edit"  title="Edit metadata">✎</button>
       <button data-action="delete" class="danger card-delete" title="Delete track">🗑</button>
     </div>
@@ -1163,6 +1176,8 @@ function openTrackModal(track) {
   lbl.oninput = syncOriginalsDim;
   editingSegIdx = -1;
   initThumbEdit(track);
+  initAudioReupload(track);
+  initRefetchBtn(track);
   // Reset parse-tracklist section
   document.getElementById("tracklist-paste").value = "";
   document.getElementById("parse-tracklist-status").textContent = "";
@@ -1524,10 +1539,32 @@ async function refreshBgTasks() {
     ]);
 
     const convEl = document.getElementById("bg-conversions");
-    if (conv.queued > 0 || conv.running) {
-      convEl.innerHTML = `<span class="bg-task-label">MP3→M4A conversions: ${conv.running ? "running" : "queued"} (${conv.converting_ids.length} track${conv.converting_ids.length !== 1 ? "s" : ""})</span>`;
+    const parts = [];
+    if (conv.running || conv.queued > 0)
+      parts.push(`${conv.converting_ids.length} converting`);
+    if (conv.queued > 0)
+      parts.push(`${conv.queued} queued`);
+    if (parts.length) {
+      convEl.innerHTML = `<span class="bg-task-label">MP3→M4A: ${parts.join(", ")}</span>`;
     } else {
       convEl.innerHTML = `<span class="bg-task-label dim">No active conversions</span>`;
+    }
+    if (conv.failed_ids?.length) {
+      const names = conv.failed_ids.map(id => {
+        const t = library.find(l => l.id === id);
+        return t ? displayName(t) : id.slice(0, 8);
+      });
+      convEl.innerHTML += `<div class="bg-task-item" style="color:var(--danger);flex-wrap:wrap;gap:4px">
+        ⚠ Failed (${conv.failed_ids.length}): ${esc(names.join(", "))}
+        <button id="retry-conv-btn" class="btn secondary" style="font-size:11px;padding:3px 8px;margin-left:4px">Retry all</button>
+      </div>`;
+      document.getElementById("retry-conv-btn")?.addEventListener("click", async () => {
+        try {
+          const r = await api("POST", "/conversions/retry");
+          toast(`Re-queued ${r.queued} conversion${r.queued !== 1 ? "s" : ""}`);
+          await refreshBgTasks();
+        } catch (err) { toast(err.message, true); }
+      });
     }
 
     const dlEl  = document.getElementById("bg-downloads");
@@ -1566,6 +1603,158 @@ document.getElementById("save-quality-btn").addEventListener("click", async () =
 
 document.getElementById("refresh-bg-btn").addEventListener("click",   refreshBgTasks);
 document.getElementById("refresh-logs-btn").addEventListener("click",  refreshLogs);
+
+// ---------------------------------------------------------------------------
+// Repair job polling — clears repairing badges when jobs finish
+// ---------------------------------------------------------------------------
+
+let _repairPollTimer = null;
+
+function startRepairPoll() {
+  if (_repairPollTimer || _repairingTracks.size === 0) return;
+  _repairPollTimer = setInterval(async () => {
+    if (_repairingTracks.size === 0) {
+      clearInterval(_repairPollTimer);
+      _repairPollTimer = null;
+      return;
+    }
+    try {
+      const jobs = await api("GET", "/jobs");
+      let changed = false;
+      for (const job of Object.values(jobs)) {
+        if (!job.track_id || !_repairingTracks.has(job.track_id)) continue;
+        if (job.status === "done") {
+          _repairingTracks.delete(job.track_id);
+          changed = true;
+        } else if (job.status === "error") {
+          _repairingTracks.delete(job.track_id);
+          const t = library.find(l => l.id === job.track_id);
+          toast(`Re-download failed: ${t ? displayName(t) : job.track_id.slice(0, 8)}`, true);
+          changed = true;
+        }
+      }
+      if (changed) await loadLibrary();
+    } catch { /* network blip — retry next tick */ }
+  }, 4000);
+}
+
+// ---------------------------------------------------------------------------
+// Deep check + upgrade
+// ---------------------------------------------------------------------------
+
+async function runDeepCheck() {
+  const btn        = document.getElementById("deep-check-btn");
+  const spinner    = document.getElementById("deep-check-spinner");
+  const results    = document.getElementById("deep-check-results");
+  const upgradeAll = document.getElementById("upgrade-all-btn");
+
+  btn.disabled             = true;
+  spinner.style.display    = "inline";
+  results.innerHTML        = "";
+  upgradeAll.style.display = "none";
+
+  try {
+    const r = await api("POST", "/admin/deep-check");
+
+    _corruptNoSource.clear();
+    _qualityOutdated.clear();
+    r.corrupt_no_source_ids?.forEach(id => _corruptNoSource.add(id));
+    r.quality_outdated_ids?.forEach(id  => _qualityOutdated.add(id));
+    r.corrupt_redownloading_ids?.forEach(id => _repairingTracks.add(id));
+    startRepairPoll();
+    renderLibrary();
+
+    const lines = [];
+    if (r.checked > 0)
+      lines.push(`Checked ${r.checked} file${r.checked !== 1 ? "s" : ""}: ${r.ok} healthy.`);
+    if (r.corrupt_redownloading > 0)
+      lines.push(`↻ Auto-repairing ${r.corrupt_redownloading} corrupt track${r.corrupt_redownloading !== 1 ? "s" : ""} (redownloading…).`);
+    if (r.corrupt_no_source_ids?.length) {
+      const names = r.corrupt_no_source_ids.map(id => {
+        const t = library.find(l => l.id === id); return t ? displayName(t) : id.slice(0, 8);
+      });
+      lines.push(`✗ ${r.corrupt_no_source_ids.length} corrupt, no source: ${names.join(", ")} — open track to re-upload.`);
+    }
+    if (r.quality_outdated_ids?.length) {
+      lines.push(`↑ ${r.quality_outdated_ids.length} track${r.quality_outdated_ids.length !== 1 ? "s" : ""} below current quality setting.`);
+      upgradeAll.style.display = "inline-flex";
+    }
+    if (r.checked === 0) lines.push("No audio files to check.");
+    else if (!lines.length) lines.push("All files are healthy.");
+
+    results.innerHTML = lines.map(l =>
+      `<div style="font-size:12px;color:var(--text-dim);margin-top:4px">${esc(l)}</div>`
+    ).join("");
+
+    // Per-track upgrade buttons for outdated tracks with a YouTube source
+    if (r.quality_outdated_ids?.length) {
+      const list = document.createElement("div");
+      list.style.cssText = "margin-top:8px;display:flex;flex-direction:column;gap:4px";
+      for (const id of r.quality_outdated_ids) {
+        const t = library.find(l => l.id === id);
+        if (!t?.source_url) continue;
+        const row = document.createElement("div");
+        row.style.cssText = "display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-dim)";
+        row.innerHTML = `<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(displayName(t))}</span>`;
+        const upgradeBtn = document.createElement("button");
+        upgradeBtn.className = "btn secondary";
+        upgradeBtn.style.cssText = "font-size:11px;padding:3px 8px;flex-shrink:0";
+        upgradeBtn.textContent = "↑ Upgrade";
+        upgradeBtn.addEventListener("click", () => upgradeTrack(id, upgradeBtn));
+        row.appendChild(upgradeBtn);
+        list.appendChild(row);
+      }
+      if (list.children.length) results.appendChild(list);
+    }
+  } catch (err) {
+    results.textContent = "Error: " + err.message;
+  } finally {
+    btn.disabled          = false;
+    spinner.style.display = "none";
+  }
+}
+
+async function upgradeTrack(trackId, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = "…"; }
+  try {
+    await api("POST", `/tracks/${trackId}/upgrade`);
+    _qualityOutdated.delete(trackId);
+    _repairingTracks.add(trackId);
+    startRepairPoll();
+    renderLibrary();
+    if (btn) btn.closest("div")?.remove();
+    toast("Upgrade queued — redownloading…");
+    const remaining = [..._qualityOutdated].filter(id => library.find(l => l.id === id)?.source_url);
+    if (!remaining.length) document.getElementById("upgrade-all-btn").style.display = "none";
+  } catch (err) {
+    if (btn) { btn.disabled = false; btn.textContent = "↑ Upgrade"; }
+    toast(err.message, true);
+  }
+}
+
+async function upgradeAllOutdated() {
+  const btn = document.getElementById("upgrade-all-btn");
+  btn.disabled = true;
+  const ids = [..._qualityOutdated].filter(id => library.find(l => l.id === id)?.source_url);
+  if (!ids.length) { btn.disabled = false; return; }
+  let done = 0;
+  for (const id of ids) {
+    try {
+      await api("POST", `/tracks/${id}/upgrade`);
+      _qualityOutdated.delete(id);
+      _repairingTracks.add(id);
+      done++;
+    } catch { /* individual failure — continue with others */ }
+  }
+  startRepairPoll();
+  renderLibrary();
+  toast(`Upgrade queued for ${done} track${done !== 1 ? "s" : ""}`);
+  btn.style.display = "none";
+  btn.disabled = false;
+}
+
+document.getElementById("deep-check-btn").addEventListener("click",   runDeepCheck);
+document.getElementById("upgrade-all-btn").addEventListener("click",  upgradeAllOutdated);
 
 // ---------------------------------------------------------------------------
 // Custom thumbnail (edit modal)
@@ -1635,6 +1824,90 @@ function initThumbEdit(track) {
 }
 
 // ---------------------------------------------------------------------------
+// Audio re-upload (edit modal)
+// ---------------------------------------------------------------------------
+
+function initAudioReupload(track) {
+  const row     = document.getElementById("audio-reupload-row");
+  const label   = document.getElementById("audio-reupload-label");
+  const status  = document.getElementById("reupload-audio-status");
+  let btn       = document.getElementById("reupload-audio-btn");
+  let fileInput = document.getElementById("audio-reupload-input");
+
+  const showRow = _corruptNoSource.has(track.id) ||
+                  (track.has_audio === false && !track.source_url);
+
+  row.style.display = showRow ? "block" : "none";
+  if (!showRow) return;
+
+  label.textContent = _corruptNoSource.has(track.id)
+    ? "Audio file is corrupt — upload a replacement"
+    : "Audio file is missing — upload a replacement";
+  status.textContent = "";
+
+  const freshBtn   = btn.cloneNode(true);
+  const freshInput = fileInput.cloneNode(true);
+  btn.replaceWith(freshBtn);
+  fileInput.replaceWith(freshInput);
+
+  freshBtn.addEventListener("click", () => freshInput.click());
+  freshInput.addEventListener("change", async () => {
+    if (!freshInput.files.length) return;
+    status.innerHTML = `<span class="spinner" style="width:12px;height:12px;border-width:1.5px"></span> Uploading…`;
+    freshBtn.disabled = true;
+    const form = new FormData();
+    form.append("file", freshInput.files[0]);
+    try {
+      const r = await fetch(`/api/tracks/${track.id}/audio`, { method: "POST", body: form });
+      if (!r.ok) throw new Error((await r.json()).error);
+      status.textContent = "✓ Uploaded — converting…";
+      _corruptNoSource.delete(track.id);
+      const libTrack = library.find(t => t.id === track.id);
+      if (libTrack) libTrack.has_audio = true;
+      row.style.display = "none";
+      renderLibrary();
+      toast("Audio file replaced");
+    } catch (err) {
+      status.textContent = "✗ " + err.message;
+      freshBtn.disabled = false;
+      toast(err.message, true);
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Re-fetch audio button (edit modal)
+// ---------------------------------------------------------------------------
+
+function initRefetchBtn(track) {
+  const btn = document.getElementById("refetch-audio-btn");
+  const isYT = !!(track.source_url &&
+    (track.source_url.includes("youtube.com") || track.source_url.includes("youtu.be")));
+  btn.style.display = isYT ? "inline-flex" : "none";
+
+  // Clone to strip any previous listener
+  const fresh = btn.cloneNode(true);
+  btn.replaceWith(fresh);
+
+  fresh.addEventListener("click", async () => {
+    if (!confirm(`Re-download "${displayName(track)}" from YouTube?\nThe current audio file will be replaced.`)) return;
+    fresh.disabled = true;
+    try {
+      await api("POST", `/tracks/${track.id}/upgrade`);
+      _qualityOutdated.delete(track.id);
+      _repairingTracks.add(track.id);
+      startRepairPoll();
+      renderLibrary();
+      document.getElementById("track-modal").classList.add("hidden");
+      toast("Re-fetch queued — redownloading…");
+    } catch (err) {
+      fresh.disabled = false;
+      toast(err.message, true);
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
 
@@ -1648,6 +1921,7 @@ function initThumbEdit(track) {
     const result = await api("POST", "/admin/sanity");
     if (result.redownloading_ids?.length) {
       result.redownloading_ids.forEach(id => _repairingTracks.add(id));
+      startRepairPoll();
       renderLibrary();
       toast(`Redownloading ${result.redownloading} track${result.redownloading > 1 ? "s" : ""} with missing audio`);
     }

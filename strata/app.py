@@ -204,9 +204,10 @@ def _run_download_job(job_id: str, url: str, track_id: str, track_dir: Path):
             "date_added": datetime.now(timezone.utc).isoformat(),
             "mood_tags": [],
             "segments": segments,
+            "audio_quality": quality,
         }
         save_metadata(track_id, meta)
-        _log(f"Download complete: {meta['title']}")
+        _log(f"Download complete: {meta['title']} ({quality})")
 
         with _jobs_lock:
             _jobs[job_id].update({"status": "done", "track": meta})
@@ -251,7 +252,9 @@ def _run_repair_job(job_id: str, url: str, track_id: str, track_dir: Path):
                 break
 
         meta = load_metadata(track_id) or {}
-        _log(f"Repair complete: {meta.get('title', track_id)}")
+        meta["audio_quality"] = quality
+        save_metadata(track_id, meta)
+        _log(f"Repair complete: {meta.get('title', track_id)} ({quality})")
         with _jobs_lock:
             _jobs[job_id].update({"status": "done", "track": meta})
 
@@ -347,6 +350,69 @@ def _has_audio(track_id: str) -> bool:
     return (d / "audio.m4a").exists() or (d / "audio.mp3").exists()
 
 
+def _check_audio_integrity(path: Path) -> bool:
+    """Three-stage integrity check.
+
+    Stage 1 — size: any real audio file must be > 100 KB.
+    Stage 2 — stream: ffprobe must report at least one audio stream with a
+               valid codec and a non-zero duration.
+    Stage 3 — decode: ffmpeg decodes the first 10 s and last 10 s with
+               -v error; any output on stderr means corrupt/truncated frames.
+               This catches files whose container header is intact but whose
+               audio data was truncated mid-write (e.g. by a killed ffmpeg).
+    """
+    try:
+        if path.stat().st_size < 100_000:
+            return False
+    except OSError:
+        return False
+
+    try:
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error",
+             "-show_entries", "stream=codec_type,duration",
+             "-of", "default=noprint_wrappers=1:nokey=1",
+             str(path)],
+            capture_output=True, timeout=30,
+        )
+        out = probe.stdout.decode(errors="replace")
+        if probe.returncode != 0 or "audio" not in out:
+            return False
+        # Duration line present and non-zero
+        for line in out.splitlines():
+            if line.startswith("duration="):
+                try:
+                    if float(line.split("=", 1)[1]) < 1.0:
+                        return False
+                except ValueError:
+                    return False
+    except Exception:
+        return False
+
+    # Decode first 10 s, then last 10 s (catches truncation at tail)
+    for extra_args in (
+        ["-t", "10"],
+        ["-sseof", "-10"],
+    ):
+        try:
+            r = subprocess.run(
+                ["ffmpeg", "-v", "error"] + extra_args +
+                ["-i", str(path), "-f", "null", "-"],
+                capture_output=True, timeout=90,
+            )
+            stderr = (r.stderr or b"").decode(errors="replace").strip()
+            if r.returncode != 0 or stderr:
+                return False
+        except Exception:
+            return False
+
+    return True
+
+
+def _is_youtube_url(url: str) -> bool:
+    return bool(url) and ("youtube.com" in url or "youtu.be" in url)
+
+
 # ---------------------------------------------------------------------------
 # Serve frontend
 # ---------------------------------------------------------------------------
@@ -362,11 +428,14 @@ def index():
 
 @app.route("/api/tracks", methods=["GET"])
 def list_tracks():
-    tracks = all_tracks()
+    tracks       = all_tracks()
+    current_qual = load_settings().get("audio_quality", "192k")
     for t in tracks:
         tid = t["id"]
         t["has_audio"]            = _has_audio(tid)
         t["has_custom_thumbnail"] = (TRACKS_DIR / tid / "custom_thumbnail.jpg").exists()
+        stored_qual               = t.get("audio_quality")
+        t["quality_outdated"]     = bool(stored_qual and stored_qual != current_qual)
     return jsonify(tracks)
 
 
@@ -529,6 +598,11 @@ def sanity_check():
             converting.append(track_id)
             _log(f"Sanity: queued MP3→M4A for '{meta.get('title', track_id)}'")
 
+        elif mp3.exists() and m4a.exists():
+            # Conversion already completed but mp3 cleanup was missed (e.g. process killed)
+            mp3.unlink(missing_ok=True)
+            _log(f"Sanity: removed orphan MP3 for '{meta.get('title', track_id)}'")
+
     return jsonify({
         "redownloading":     len(redownloading),
         "redownloading_ids": redownloading_ids,
@@ -545,6 +619,9 @@ _converting: set = set()
 _convert_queue: list = []
 _convert_lock = threading.Lock()
 _convert_running = False
+_convert_failed: set = set()   # tracks that failed this process lifetime — not re-queued automatically
+
+CONVERSION_TIMEOUT = 7200      # 2 hours — enough for the longest OST on Pi ARM
 
 
 def _conversion_worker():
@@ -557,41 +634,71 @@ def _conversion_worker():
                 return
             track_id, mp3, m4a = _convert_queue.pop(0)
 
+        if m4a.exists():
+            # Already converted (e.g. completed in a previous process run)
+            mp3.unlink(missing_ok=True)
+            _log(f"Conversion skipped (already done): {track_id}")
+            with _convert_lock:
+                _converting.discard(track_id)
+            continue
+
+        if not mp3.exists() or mp3.stat().st_size == 0:
+            _log(f"Conversion skipped (missing/empty input): {track_id}")
+            with _convert_lock:
+                _converting.discard(track_id)
+                _convert_failed.add(track_id)
+            continue
+
         settings = load_settings()
         quality  = settings.get("audio_quality", "192k")
         _log(f"Conversion started: {track_id} ({quality})")
         tmp = m4a.with_name("audio.tmp.m4a")
+        success = False
         try:
             r = subprocess.run(
                 ["ffmpeg", "-y", "-i", str(mp3),
                  "-c:a", "aac", "-b:a", quality,
                  "-movflags", "+faststart", str(tmp)],
-                capture_output=True, timeout=600,
+                capture_output=True, timeout=CONVERSION_TIMEOUT,
             )
             if r.returncode == 0 and tmp.exists():
                 tmp.rename(m4a)
                 mp3.unlink(missing_ok=True)
-                _log(f"Conversion complete: {track_id}")
+                meta = load_metadata(track_id)
+                if meta:
+                    meta["audio_quality"] = quality
+                    save_metadata(track_id, meta)
+                _log(f"Conversion complete: {track_id} ({quality})")
+                success = True
             else:
-                _log(f"Conversion failed: {track_id}")
+                stderr_tail = (r.stderr or b"").decode(errors="replace").strip()[-300:]
+                _log(f"Conversion failed (rc={r.returncode}): {track_id} — {stderr_tail}")
         except Exception as exc:
             _log(f"Conversion error: {track_id} — {exc}")
         finally:
             tmp.unlink(missing_ok=True)
             with _convert_lock:
                 _converting.discard(track_id)
+                if not success:
+                    _convert_failed.add(track_id)
 
 
 def _enqueue_conversion(track_id: str, mp3: Path, m4a: Path):
     global _convert_running
     with _convert_lock:
-        if track_id in _converting:
+        if track_id in _converting or track_id in _convert_failed:
             return
         _converting.add(track_id)
         _convert_queue.append((track_id, mp3, m4a))
         if not _convert_running:
             _convert_running = True
             threading.Thread(target=_conversion_worker, daemon=True).start()
+
+
+def _retry_conversion(track_id: str):
+    """Remove a track from the failed set so it can be re-queued."""
+    with _convert_lock:
+        _convert_failed.discard(track_id)
 
 
 # ---------------------------------------------------------------------------
@@ -803,7 +910,151 @@ def get_conversions():
             "running":        _convert_running,
             "queued":         len(_convert_queue),
             "converting_ids": list(_converting),
+            "failed_ids":     list(_convert_failed),
         })
+
+
+@app.route("/api/conversions/retry", methods=["POST"])
+def retry_conversions():
+    """Clear the failed-conversions set and re-enqueue all .mp3 tracks that lack .m4a."""
+    with _convert_lock:
+        _convert_failed.clear()
+    queued = []
+    if TRACKS_DIR.exists():
+        for track_dir in TRACKS_DIR.iterdir():
+            if not track_dir.is_dir():
+                continue
+            mp3 = track_dir / "audio.mp3"
+            m4a = track_dir / "audio.m4a"
+            if mp3.exists() and not m4a.exists() and mp3.stat().st_size > 0:
+                _enqueue_conversion(track_dir.name, mp3, m4a)
+                queued.append(track_dir.name)
+    _log(f"Retry conversions: {len(queued)} track(s) re-queued")
+    return jsonify({"queued": len(queued)})
+
+
+@app.route("/api/admin/deep-check", methods=["POST"])
+def deep_check():
+    """Run ffprobe on every audio file and detect quality mismatches.
+
+    Corrupt tracks with a YouTube source are repaired automatically.
+    Corrupt tracks without a source and quality-outdated tracks are
+    returned for the UI to surface to the user.
+    """
+    if not TRACKS_DIR.exists():
+        return jsonify({"checked": 0, "ok": 0, "corrupt": 0, "quality_outdated": 0,
+                        "corrupt_no_source_ids": [], "quality_outdated_ids": []})
+
+    current_quality = load_settings().get("audio_quality", "192k")
+    ok_ids, corrupt_redownloading, corrupt_no_source, quality_outdated = [], [], [], []
+
+    for track_dir in TRACKS_DIR.iterdir():
+        if not track_dir.is_dir():
+            continue
+        track_id = track_dir.name
+        meta = load_metadata(track_id)
+        if not meta:
+            continue
+
+        audio = track_dir / "audio.m4a"
+        if not audio.exists():
+            audio = track_dir / "audio.mp3"
+        if not audio.exists():
+            continue  # no audio at all — handled by regular sanity
+
+        if not _check_audio_integrity(audio):
+            _log(f"Deep-check: corrupt file detected for '{meta.get('title', track_id)}'")
+            source_url = meta.get("source_url") or ""
+            if _is_youtube_url(source_url):
+                # Remove corrupt file and kick off repair download
+                audio.unlink(missing_ok=True)
+                _retry_conversion(track_id)
+                job_id = str(uuid.uuid4())
+                with _jobs_lock:
+                    _jobs[job_id] = {"status": "queued", "url": source_url,
+                                     "track_id": track_id, "repair": True}
+                threading.Thread(
+                    target=_run_repair_job,
+                    args=(job_id, source_url, track_id, track_dir),
+                    daemon=True,
+                ).start()
+                corrupt_redownloading.append(track_id)
+            else:
+                corrupt_no_source.append(track_id)
+        else:
+            stored_quality = meta.get("audio_quality")
+            if stored_quality and stored_quality != current_quality:
+                quality_outdated.append(track_id)
+                _log(f"Deep-check: quality mismatch for '{meta.get('title', track_id)}'"
+                     f" (stored={stored_quality}, current={current_quality})")
+            else:
+                ok_ids.append(track_id)
+
+    total = len(ok_ids) + len(corrupt_redownloading) + len(corrupt_no_source) + len(quality_outdated)
+    _log(f"Deep-check done: {len(ok_ids)} ok, {len(corrupt_redownloading)} redownloading, "
+         f"{len(corrupt_no_source)} corrupt-manual, {len(quality_outdated)} quality-outdated")
+    return jsonify({
+        "checked":                   total,
+        "ok":                        len(ok_ids),
+        "corrupt_redownloading":     len(corrupt_redownloading),
+        "corrupt_redownloading_ids": corrupt_redownloading,
+        "corrupt_no_source":         len(corrupt_no_source),
+        "corrupt_no_source_ids":     corrupt_no_source,
+        "quality_outdated":          len(quality_outdated),
+        "quality_outdated_ids":      quality_outdated,
+    })
+
+
+@app.route("/api/tracks/<track_id>/audio", methods=["POST"])
+def reupload_audio(track_id):
+    """Replace the audio file for a track (e.g. after corruption or quality upgrade)."""
+    track_dir = TRACKS_DIR / track_id
+    if not track_dir.exists():
+        abort(404)
+    if "file" not in request.files:
+        return jsonify({"error": "no file"}), 400
+    f = request.files["file"]
+    if not f.filename:
+        return jsonify({"error": "empty filename"}), 400
+
+    # Remove all existing audio
+    for old in track_dir.glob("audio.*"):
+        old.unlink(missing_ok=True)
+
+    audio_path = track_dir / "audio.mp3"
+    f.save(str(audio_path))
+    _retry_conversion(track_id)
+    _enqueue_conversion(track_id, audio_path, track_dir / "audio.m4a")
+    _log(f"Audio re-uploaded for '{load_metadata(track_id).get('title', track_id)}'")
+    return jsonify({"ok": True})
+
+
+@app.route("/api/tracks/<track_id>/upgrade", methods=["POST"])
+def upgrade_track(track_id):
+    """Re-download a YouTube track at the current quality setting."""
+    meta = load_metadata(track_id)
+    if not meta:
+        abort(404)
+    source_url = meta.get("source_url") or ""
+    if not _is_youtube_url(source_url):
+        return jsonify({"error": "no YouTube source — re-upload manually"}), 400
+
+    track_dir = TRACKS_DIR / track_id
+    for old in track_dir.glob("audio.*"):
+        old.unlink(missing_ok=True)
+    _retry_conversion(track_id)
+
+    job_id = str(uuid.uuid4())
+    with _jobs_lock:
+        _jobs[job_id] = {"status": "queued", "url": source_url,
+                         "track_id": track_id, "repair": True}
+    threading.Thread(
+        target=_run_repair_job,
+        args=(job_id, source_url, track_id, track_dir),
+        daemon=True,
+    ).start()
+    _log(f"Quality upgrade queued for '{meta.get('title', track_id)}'")
+    return jsonify({"job_id": job_id})
 
 
 # ---------------------------------------------------------------------------

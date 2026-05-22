@@ -982,6 +982,15 @@ input[type=range]::-webkit-slider-thumb {
 /* When user has set a custom name, dim the original info */
 .slot-origin.origin-dimmed { opacity: 0.4; }
 
+.slot-channel {
+  font-size: 10px;
+  color: var(--text-dim);
+  opacity: 0.65;
+  margin-bottom: 2px;
+  transition: opacity 0.15s;
+}
+.slot-channel.origin-dimmed { opacity: 0.2; }
+
 /* ── Mixer seek row ───────────────────────────────────────────────────────── */
 .mixer-seek-row {
   display: flex;

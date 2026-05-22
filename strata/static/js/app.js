@@ -525,12 +525,14 @@ function updateSeekDisplay(slotId, node) {
     timeEl.textContent = `${fmt(cur)} / ${fmt(total)}`;
   }
 
-  // Live segment chip highlight for whole-track beds
+  // Live segment chip highlight + current-segment label for whole-track beds
   if (node.zone === "bed" && !node.segment && node.meta.segments?.length) {
     const t = node.audioEl.currentTime;
     const activeSeg = node.meta.segments.find(s => t >= s.start && t < s.end);
     document.querySelectorAll(`#mtrack-${slotId} .seg-chip`).forEach(chip =>
       chip.classList.toggle("active", chip.dataset.segName === (activeSeg?.name ?? "")));
+    const curLabel = el.querySelector(".seg-current-label");
+    if (curLabel) curLabel.textContent = activeSeg ? `(${activeSeg.name})` : "";
   }
 }
 
@@ -557,13 +559,10 @@ function renderMixerTrack(slotId) {
       ? `<img class="thumb" src="${thumbUrl}" alt="">`
       : `<div class="thumb-placeholder">♫</div>`}
     <div class="mixer-track-info">
-      <div class="slot-name" contenteditable="true" spellcheck="false"
-           data-placeholder="${esc(segment ? segment.name : displayName(meta))}"
-           title="Click to rename this slot"></div>
       <div class="slot-origin">
-        ${esc(displayName(meta))}${meta.source_channel && !meta.custom_label ? ` · ${esc(meta.source_channel)}` : ""}
-        ${segment ? ` <span class="seg-label">◈ ${esc(segment.name)}</span>` : ""}
+        ${segment ? `<span class="seg-label">◈ ${esc(segment.name)} – </span>` : ""}${esc(displayName(meta))}${!segment && meta.segments?.length ? ` <span class="seg-label seg-current-label"></span>` : ""}
       </div>
+      ${meta.source_channel ? `<div class="slot-channel">${esc(meta.source_channel)}</div>` : ""}
       <div class="mixer-seek-row">
         <span class="time-display">0:00 / ${fmt(segment ? segment.end - segment.start : meta.duration_seconds)}</span>
         <input type="range" class="seek-slider" min="0" max="1000" value="0">
@@ -619,20 +618,6 @@ function renderMixerTrack(slotId) {
     });
     div.querySelector(".mixer-track-info").appendChild(bar);
   }
-
-  // — Slot name (contenteditable)
-  const slotNameEl   = div.querySelector(".slot-name");
-  const slotOriginEl = div.querySelector(".slot-origin");
-  const syncSlotName = () => {
-    const val = slotNameEl.textContent.trim();
-    node.displayName = val || null;
-    slotOriginEl.classList.toggle("origin-dimmed", !!val);
-    slotNameEl.classList.toggle("empty", !val);
-  };
-  slotNameEl.addEventListener("input",   syncSlotName);
-  slotNameEl.addEventListener("blur",    () => { if (!slotNameEl.textContent.trim()) slotNameEl.textContent = ""; syncSlotName(); });
-  slotNameEl.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); slotNameEl.blur(); } });
-  syncSlotName();
 
   // — Play / Pause
   const playBtn = div.querySelector(".play-btn");
@@ -874,7 +859,7 @@ function crossfadeNodes(from, to, dur) {
     to.audioEl.volume = Math.min(toTarget, toTarget * t);
     if (step >= steps) {
       clearInterval(timer);
-      if (from) from.audioEl.volume = 0;
+      if (from) { from.audioEl.volume = 0; from.audioEl.pause(); }
       to.audioEl.volume = toTarget;
     }
   }, stepMs);

@@ -2,4 +2,19 @@ __pycache__/
 *.pyc
 *.pyo
 .env
+
+# Flask / app data
 strata/media/
+
+# PyInstaller build artifacts
+build/
+dist/
+*.spec.bak
+
+# Generated icons (committed only when finalised)
+desktop/assets/icon.png
+desktop/assets/icon.ico
+desktop/assets/icon.icns
+
+# Bundled external binaries (added manually, not tracked)
+desktop/assets/bin/

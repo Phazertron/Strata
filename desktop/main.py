@@ -69,6 +69,15 @@ def _start_server() -> None:
     # Point MEDIA_ROOT at the user data directory before importing the app
     os.environ["MEDIA_ROOT"] = _user_data_dir()
 
+    # Prepend the bundled bin/ directory to PATH so app.py finds yt-dlp and
+    # ffmpeg whether running frozen (PyInstaller) or from source with local bins
+    if getattr(sys, "frozen", False):
+        bin_dir = os.path.join(sys._MEIPASS, "bin")
+    else:
+        bin_dir = os.path.join(os.path.dirname(__file__), "assets", "bin")
+    if os.path.isdir(bin_dir):
+        os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
+
     root = _app_root()
     if root not in sys.path:
         sys.path.insert(0, root)

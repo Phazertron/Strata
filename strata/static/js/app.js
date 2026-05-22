@@ -267,7 +267,8 @@ function makeCard(track) {
   card.className = cardClass;
   card.dataset.id = track.id;
 
-  const thumbUrl = track.thumbnail ? `/api/tracks/${track.id}/thumbnail` : null;
+  const thumbUrl = (track.thumbnail || track.has_custom_thumbnail)
+    ? `/api/tracks/${track.id}/thumbnail${track._thumbV ? `?v=${track._thumbV}` : ""}` : null;
   const hasSegs  = track.segments?.length > 0;
 
   card.innerHTML = `
@@ -692,7 +693,8 @@ function renderMixerTrack(slotId) {
   div.id = "mtrack-" + slotId;
   if (zone === "queue") div.setAttribute("draggable", "true");
 
-  const thumbUrl = meta.thumbnail ? `/api/tracks/${meta.id}/thumbnail` : null;
+  const thumbUrl = (meta.thumbnail || meta.has_custom_thumbnail)
+    ? `/api/tracks/${meta.id}/thumbnail${meta._thumbV ? `?v=${meta._thumbV}` : ""}` : null;
 
   div.innerHTML = `
     ${zone === "queue" ? `<div class="drag-handle" title="Drag to reorder">⠿</div>` : ""}
@@ -1966,6 +1968,34 @@ document.getElementById("upgrade-all-btn").addEventListener("click",  upgradeAll
 // Custom thumbnail (edit modal)
 // ---------------------------------------------------------------------------
 
+function refreshMixerThumbnails(trackId) {
+  for (const [slotId, node] of activeTracks) {
+    if (node.meta.id !== trackId) continue;
+    const el = document.getElementById("mtrack-" + slotId);
+    if (!el) continue;
+    const hasThumb = node.meta.thumbnail || node.meta.has_custom_thumbnail;
+    const newSrc   = `/api/tracks/${trackId}/thumbnail?v=${node.meta._thumbV || Date.now()}`;
+    const img         = el.querySelector("img.thumb");
+    const placeholder = el.querySelector(".thumb-placeholder");
+    if (hasThumb) {
+      if (img) {
+        img.src = newSrc;
+      } else if (placeholder) {
+        const newImg = document.createElement("img");
+        newImg.className = "thumb";
+        newImg.alt = "";
+        newImg.src = newSrc;
+        placeholder.replaceWith(newImg);
+      }
+    } else if (img) {
+      const ph = document.createElement("div");
+      ph.className = "thumb-placeholder";
+      ph.textContent = "♫";
+      img.replaceWith(ph);
+    }
+  }
+}
+
 function initThumbEdit(track) {
   const img         = document.getElementById("thumb-preview-img");
   const placeholder = document.getElementById("thumb-preview-placeholder");
@@ -2003,9 +2033,9 @@ function initThumbEdit(track) {
       img.style.display = "block";
       placeholder.style.display = "none";
       freshRemove.style.display = "inline-flex";
-      // update library in memory
       const libTrack = library.find(t => t.id === track.id);
-      if (libTrack) libTrack.has_custom_thumbnail = true;
+      if (libTrack) { libTrack.has_custom_thumbnail = true; libTrack._thumbV = Date.now(); }
+      refreshMixerThumbnails(track.id);
       renderLibrary();
       toast("Custom thumbnail saved");
     } catch (err) { toast(err.message, true); }
@@ -2014,15 +2044,17 @@ function initThumbEdit(track) {
     try {
       await api("DELETE", `/tracks/${track.id}/thumbnail/custom`);
       freshRemove.style.display = "none";
-      // Revert to original thumbnail or placeholder
       const libTrack = library.find(t => t.id === track.id);
-      if (libTrack) libTrack.has_custom_thumbnail = false;
+      if (libTrack) { libTrack.has_custom_thumbnail = false; libTrack._thumbV = Date.now(); }
       if (track.thumbnail) {
         img.src = `/api/tracks/${track.id}/thumbnail?t=${Date.now()}`;
+        img.style.display = "block";
+        placeholder.style.display = "none";
       } else {
         img.style.display = "none";
         placeholder.style.display = "flex";
       }
+      refreshMixerThumbnails(track.id);
       renderLibrary();
       toast("Custom thumbnail removed");
     } catch (err) { toast(err.message, true); }

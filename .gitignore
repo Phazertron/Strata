@@ -6,8 +6,8 @@ __pycache__/
 # Flask / app data
 strata/media/
 
-# PyInstaller build artifacts
-build/
+# PyInstaller build artifacts (root-level only, not desktop/build/ source dir)
+/build/
 dist/
 *.spec.bak
 

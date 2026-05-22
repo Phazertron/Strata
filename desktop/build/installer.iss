@@ -25,7 +25,7 @@ SetupIconFile=..\assets\icon.ico
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
-PrivilegesRequired=lowest       ; no admin required — installs per-user
+PrivilegesRequired=none
 ArchitecturesInstallIn64BitMode=x64
 
 [Languages]

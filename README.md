@@ -2,9 +2,7 @@
 
 > A self-hosted ambient sound mixer for layering music, soundscapes, and audio — runs in the browser, lives in your system tray.
 
-<!-- SCREENSHOT: hero — mixer view with 2–3 bed tracks active and a loaded queue -->
-<!-- Replace the line below with: ![Strata mixer](docs/screenshots/mixer.webp) -->
-![Strata mixer](docs/screenshots/mixer.webp)
+![Strata mixer](docs/screenshots/mixer.png)
 
 ---
 
@@ -20,8 +18,6 @@ Audio comes from local files or any URL yt-dlp supports. Chapters and tracklist 
 
 ### Mixer
 
-<!-- SCREENSHOT: beds zone with segment chips lit up + queue panel open -->
-<!-- Replace: ![Mixer detail](docs/screenshots/mixer_detail.webp) -->
 ![Mixer detail](docs/screenshots/mixer_detail.webp)
 
 - **Beds zone** — multiple tracks loop simultaneously, each with independent volume
@@ -32,9 +28,7 @@ Audio comes from local files or any URL yt-dlp supports. Chapters and tracklist 
 
 ### Library
 
-<!-- SCREENSHOT: library grid with search active, some cards expanded showing segment list -->
-<!-- Replace: ![Library](docs/screenshots/library.webp) -->
-![Library](docs/screenshots/library.webp)
+![Library](docs/screenshots/library.png)
 
 - **Browse** — filter by All / By Channel / By Mood; sort by date, title, or play count
 - **Search** — live filter across titles and segment names; matching cards expand their segment list automatically
@@ -43,9 +37,7 @@ Audio comes from local files or any URL yt-dlp supports. Chapters and tracklist 
 
 ### Track editor
 
-<!-- SCREENSHOT: edit modal open with segments list + thumbnail -->
-<!-- Replace: ![Track editor](docs/screenshots/editor.webp) -->
-![Track editor](docs/screenshots/editor.webp)
+![Track editor](docs/screenshots/editor.png)
 
 - **Download from URL** — paste any URL; yt-dlp fetches audio + thumbnail in the background
 - **Auto-segmentation** — chapters from yt-dlp and tracklist timestamps from descriptions are parsed automatically

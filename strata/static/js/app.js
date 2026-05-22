@@ -75,6 +75,7 @@ let currentPresetName = null;   // name of the last loaded preset
 let currentView = "mixer";
 let libTab = "all";
 let libSort = "date";
+let libSearch = "";
 
 // ---------------------------------------------------------------------------
 // Utilities
@@ -233,6 +234,7 @@ function renderLibrary() {
       tracks.forEach(t => grid.appendChild(makeCard(t)));
     }
   }
+  if (libSearch) filterLibrary(libSearch);
 }
 
 function makeGroupHeader(label) {
@@ -240,6 +242,16 @@ function makeGroupHeader(label) {
   h.className = "group-header";
   h.textContent = label;
   return h;
+}
+
+function setCardSegOpen(card, open) {
+  const subRow    = card.querySelector(".seg-sub-row");
+  const toggleBtn = card.querySelector(".seg-toggle-btn");
+  if (!subRow) return;
+  const track = library.find(t => t.id === card.dataset.id);
+  if (!track) return;
+  subRow.style.display = open ? "flex" : "none";
+  if (toggleBtn) toggleBtn.textContent = `${track.segments.length} segment${track.segments.length > 1 ? "s" : ""} ${open ? "▴" : "▾"}`;
 }
 
 function makeCard(track) {
@@ -296,15 +308,19 @@ function makeCard(track) {
     </div>
   `;
 
-  // Segment sub-row toggle
+  // Segment sub-row toggle — expands all cards in the same visual grid row
   const toggleBtn = card.querySelector(".seg-toggle-btn");
   const subRow    = card.querySelector(".seg-sub-row");
   if (toggleBtn && subRow) {
     toggleBtn.addEventListener("click", e => {
       e.stopPropagation();
-      const open = subRow.style.display !== "none";
-      subRow.style.display = open ? "none" : "flex";
-      toggleBtn.textContent = `${track.segments.length} segment${track.segments.length > 1 ? "s" : ""} ${open ? "▾" : "▴"}`;
+      const newOpen = subRow.style.display === "none";
+      const thisTop = card.getBoundingClientRect().top;
+      document.querySelectorAll("#library-grid .track-card").forEach(c => {
+        if (Math.abs(c.getBoundingClientRect().top - thisTop) < 5) {
+          setCardSegOpen(c, newOpen);
+        }
+      });
     });
   }
 
@@ -351,6 +367,131 @@ document.querySelectorAll(".lib-tab").forEach(btn =>
 
 document.getElementById("lib-sort").addEventListener("change", e => {
   libSort = e.target.value; renderLibrary();
+});
+
+// ---------------------------------------------------------------------------
+// Library search
+// ---------------------------------------------------------------------------
+
+function escapeRegex(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function highlightText(el, re) {
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  let n;
+  while ((n = walker.nextNode())) nodes.push(n);
+  for (const textNode of nodes) {
+    re.lastIndex = 0;
+    if (!re.test(textNode.nodeValue)) continue;
+    re.lastIndex = 0;
+    const text = textNode.nodeValue;
+    const frag = document.createDocumentFragment();
+    let last = 0, m;
+    while ((m = re.exec(text)) !== null) {
+      frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+      const mark = document.createElement("span");
+      mark.className = "search-hl";
+      mark.textContent = m[0];
+      frag.appendChild(mark);
+      last = m.index + m[0].length;
+    }
+    frag.appendChild(document.createTextNode(text.slice(last)));
+    textNode.parentNode.replaceChild(frag, textNode);
+  }
+}
+
+function clearHighlights(grid) {
+  grid.querySelectorAll(".search-hl").forEach(mark => {
+    mark.parentNode.replaceChild(document.createTextNode(mark.textContent), mark);
+  });
+  grid.querySelectorAll(".card-title, .card-channel, .seg-extract-name").forEach(el => el.normalize());
+}
+
+function filterLibrary(keyword) {
+  const grid = document.getElementById("library-grid");
+  clearHighlights(grid);
+
+  const kw = keyword.trim().toLowerCase();
+  if (!kw) {
+    grid.querySelectorAll(".track-card[data-search-expanded]").forEach(card => {
+      setCardSegOpen(card, false);
+      delete card.dataset.searchExpanded;
+    });
+    grid.querySelectorAll(".track-card, .group-header").forEach(el => el.style.display = "");
+    return;
+  }
+
+  const re = new RegExp(escapeRegex(kw), "gi");
+
+  grid.querySelectorAll(".track-card").forEach(card => {
+    const track = library.find(t => t.id === card.dataset.id);
+    if (!track) { card.style.display = "none"; return; }
+
+    const titleMatch = displayName(track).toLowerCase().includes(kw);
+    const segMatches = (track.segments || []).filter(s => s.name.toLowerCase().includes(kw));
+
+    if (!titleMatch && segMatches.length === 0) {
+      card.style.display = "none";
+      return;
+    }
+
+    card.style.display = "";
+
+    // Highlight title and channel
+    const titleEl = card.querySelector(".card-title");
+    if (titleEl) highlightText(titleEl, re);
+    const channelEl = card.querySelector(".card-channel");
+    if (channelEl) highlightText(channelEl, re);
+
+    // Segment handling
+    if (segMatches.length > 0) {
+      const subRow   = card.querySelector(".seg-sub-row");
+      const toggleBtn = card.querySelector(".seg-toggle-btn");
+      // Auto-expand
+      if (subRow && subRow.style.display === "none") {
+        setCardSegOpen(card, true);
+        card.dataset.searchExpanded = "1";
+      }
+      // Highlight matching segment names and scroll sub-row to first match
+      let firstMatchItem = null;
+      card.querySelectorAll(".seg-extract-item").forEach(item => {
+        const nameEl = item.querySelector(".seg-extract-name");
+        if (!nameEl) return;
+        if (nameEl.textContent.toLowerCase().includes(kw)) {
+          highlightText(nameEl, re);
+          if (!firstMatchItem) firstMatchItem = item;
+        }
+      });
+      if (firstMatchItem && subRow) {
+        requestAnimationFrame(() => {
+          const rowTop  = subRow.getBoundingClientRect().top;
+          const itemTop = firstMatchItem.getBoundingClientRect().top;
+          subRow.scrollBy({ top: itemTop - rowTop, behavior: "smooth" });
+        });
+      }
+    }
+  });
+
+  // Hide group headers whose cards are all hidden
+  grid.querySelectorAll(".group-header").forEach(header => {
+    let next = header.nextElementSibling;
+    let hasVisible = false;
+    while (next && !next.classList.contains("group-header")) {
+      if (next.style.display !== "none") { hasVisible = true; break; }
+      next = next.nextElementSibling;
+    }
+    header.style.display = hasVisible ? "" : "none";
+  });
+
+}
+
+let _searchDebounce = null;
+document.getElementById("lib-search").addEventListener("input", e => {
+  clearTimeout(_searchDebounce);
+  libSearch = e.target.value;
+  _searchDebounce = setTimeout(() => filterLibrary(libSearch), 150);
 });
 
 // ---------------------------------------------------------------------------

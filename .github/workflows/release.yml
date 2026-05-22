@@ -195,4 +195,5 @@ jobs:
         with:
           files: artifacts/*
           prerelease: ${{ startsWith(github.ref_name, 'v0.') || contains(github.ref_name, '-') }}
+          make_latest: ${{ !(startsWith(github.ref_name, 'v0.') || contains(github.ref_name, '-')) }}
           generate_release_notes: true

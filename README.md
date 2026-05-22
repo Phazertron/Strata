@@ -207,4 +207,4 @@ Strata is a personal-use tool. You are responsible for ensuring that any audio y
 
 ## License
 
-[MIT](LICENSE) © Claudio Bedini
+[MIT](LICENSE) © Claudio Bendini

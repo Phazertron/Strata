@@ -437,6 +437,19 @@ main {
   flex-wrap: wrap;
 }
 
+#lib-search {
+  flex: 1;
+  min-width: 140px;
+  max-width: 280px;
+}
+
+.search-hl {
+  background: var(--accent);
+  color: #fff;
+  border-radius: 2px;
+  padding: 0 2px;
+}
+
 #library-tabs {
   display: flex;
   gap: 4px;
@@ -921,9 +934,10 @@ input[type=range]::-webkit-slider-thumb {
   margin-top: 6px;
   padding-top: 6px;
   border-top: 1px solid var(--border);
-  max-height: 180px;
+  max-height: 220px;
   overflow-y: auto;
 }
+
 
 .seg-extract-item {
   display: flex;

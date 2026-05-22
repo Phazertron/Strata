@@ -1,108 +1,87 @@
 # Strata
 
-A self-hosted ambient sound mixer for layering music, soundscapes, and audio tracks in a browser. Designed for focus, sleep, or background listening sessions.
+> A self-hosted ambient sound mixer for layering music, soundscapes, and audio — runs in the browser, lives in your system tray.
+
+<!-- SCREENSHOT: hero — mixer view with 2–3 bed tracks active and a loaded queue -->
+<!-- Replace the line below with: ![Strata mixer](docs/screenshots/mixer.webp) -->
+![Strata mixer](docs/screenshots/mixer.webp)
+
+---
+
+## What it does
+
+Strata lets you build a personal ambient audio environment. Load looping bed tracks (rain, music, ambience) at independent volumes, queue up longer pieces to play in sequence, and save the whole state as a preset you can recall instantly.
+
+Audio comes from local files or any URL yt-dlp supports. Chapters and tracklist timestamps are parsed automatically into segments you can navigate track by track.
+
+---
 
 ## Features
 
+### Mixer
+
+<!-- SCREENSHOT: beds zone with segment chips lit up + queue panel open -->
+<!-- Replace: ![Mixer detail](docs/screenshots/mixer_detail.webp) -->
+![Mixer detail](docs/screenshots/mixer_detail.webp)
+
 - **Beds zone** — multiple tracks loop simultaneously, each with independent volume
-- **Queue zone** — tracks play in sequence with drag-to-reorder, a master volume, and optional looping
-- **Library** — browse by All / By Channel / By Mood, sort by date, title, or play count
-- **YouTube / URL download** — paste any URL, yt-dlp fetches audio + thumbnail in the background
+- **Queue zone** — sequential playback with drag-to-reorder, loop toggle, and master volume
+- **Segment navigation** — `‹` / `›` buttons on each bed track jump between segments; the active chip highlights live as the track plays
+- **Transport controls** — global ⏮ / ▶ / ⏭ with Spotify-style prev (restarts track if past 3 s, goes to previous otherwise)
+- **Presets** — save and restore full mixer states; mark one as the startup default
+
+### Library
+
+<!-- SCREENSHOT: library grid with search active, some cards expanded showing segment list -->
+<!-- Replace: ![Library](docs/screenshots/library.webp) -->
+![Library](docs/screenshots/library.webp)
+
+- **Browse** — filter by All / By Channel / By Mood; sort by date, title, or play count
+- **Search** — live filter across titles and segment names; matching cards expand their segment list automatically
+- **Row expansion** — expanding segments on one card opens the whole grid row together
+- **Stats** — listening time (all time / 30 days / 7 days), most played, recently played
+
+### Track editor
+
+<!-- SCREENSHOT: edit modal open with segments list + thumbnail -->
+<!-- Replace: ![Track editor](docs/screenshots/editor.webp) -->
+![Track editor](docs/screenshots/editor.webp)
+
+- **Download from URL** — paste any URL; yt-dlp fetches audio + thumbnail in the background
 - **Auto-segmentation** — chapters from yt-dlp and tracklist timestamps from descriptions are parsed automatically
-- **Manual segments** — add, edit, and reorder segments in the track editor; paste a tracklist text to auto-generate them
-- **Mood tags** — tag tracks with comma-separated moods; autocomplete from your existing tag corpus
-- **Presets** — save and restore full mixer states (beds + queue + volumes); mark one as the default on startup
-- **Stats** — listening time (all time / 30 days / 7 days), most played, most listened by time, recently played
-- **Segment bar** — visual timeline of segments in the mixer; hover any chip for an instant name + time preview
+- **Manual segments** — add, edit, reorder; paste a tracklist block and click **Parse** to auto-generate
+- **Custom thumbnails** — upload your own image per track
+- **Mood tags** — comma-separated with autocomplete from your corpus
 
-## Disclaimer
+---
 
-Strata is a personal-use tool. You are responsible for ensuring that any audio you download complies with the terms of service of the source platform and applicable copyright law. The authors make no representations regarding the legality of downloading specific content.
+## Installation
 
-## Stack
+### Desktop app — Windows · macOS · Linux
 
-| Layer | Technology |
+Download the installer for your platform from the [**Releases**](https://github.com/Phazertron/Strata/releases) page:
+
+| Platform | File |
 |---|---|
-| Backend | Python 3.12, Flask 3, Gunicorn (gthread) |
-| Audio download | yt-dlp + ffmpeg |
-| Frontend | Vanilla JS, Web Audio API |
-| Storage | Flat files (JSON metadata + mp3 + thumbnail) + SQLite (telemetry) |
-| Container | Docker, linux/arm64 |
-| Reverse proxy | Traefik |
+| Windows | `Strata-Setup-x.x.x.exe` — wizard installer, installs per-user, no admin required |
+| macOS | `Strata.dmg` — drag to Applications; right-click → Open on first launch (Gatekeeper) |
+| Linux | `Strata-linux-x86_64.tar.gz` — extract and run `./Strata/Strata` |
 
-## Project structure
+After launch, Strata lives in the system tray (Windows/Linux) or menu bar (macOS). Click **Open Strata** to open the UI in your browser.
 
-```
-strata/                 # Flask app (shared by both deployment targets)
-├── app.py              # Flask API + download jobs + DB telemetry
-├── wsgi.py             # Gunicorn entry point (Docker)
-├── requirements.txt
-├── Dockerfile
-├── templates/
-│   └── index.html      # Single-page app shell
-└── static/
-    ├── css/style.css
-    └── js/app.js       # All UI logic (mixer, library, modals, audio engine)
-desktop/                # Native desktop wrapper (tray / menu-bar app)
-├── main.py             # pystray entry point, starts waitress server
-├── requirements.txt
-├── README.md           # Desktop build guide
-├── assets/
-│   ├── generate_icon.py
-│   └── bin/            # Place yt-dlp + ffmpeg binaries here for bundling
-└── build/
-    ├── strata.spec     # PyInstaller spec (Windows + macOS)
-    └── installer.iss   # Inno Setup script (Windows installer wizard)
-docker-compose.yml
-```
+User data (tracks, presets, database) is stored in:
+- **Windows:** `%APPDATA%\Strata`
+- **macOS:** `~/Library/Application Support/Strata`
+- **Linux:** `~/.local/share/Strata`
 
-Media is stored outside the container and mounted at `/media`:
+---
 
-```
-/media/
-├── tracks/
-│   └── <uuid>/
-│       ├── audio.mp3
-│       ├── thumbnail.jpg
-│       └── meta.json
-├── presets/
-│   └── <name>.json
-└── telemetry.db
-```
-
-## Running locally
-
-### Desktop app (system tray / menu bar)
-
-The easiest way to run Strata on a personal machine — starts a local server and adds a tray icon with an **Open** shortcut.
-
-```bash
-pip install -r strata/requirements.txt   # skip gunicorn errors on Windows/macOS
-pip install -r desktop/requirements.txt
-python desktop/assets/generate_icon.py   # once, to create icons
-python desktop/main.py
-```
-
-See [desktop/README.md](desktop/README.md) for building a distributable installer.
-
-### Flask dev server (no tray icon)
-
-```bash
-cd strata
-pip install -r requirements.txt
-# ffmpeg and yt-dlp must be on PATH
-MEDIA_ROOT=./media flask run
-```
-
-## Deploying with Docker Compose
+### Self-hosted (Docker)
 
 The `docker-compose.yml` is written for a homelab running Traefik as a reverse proxy. Adjust the `Host` labels and volume path to match your setup.
 
 ```bash
-# build and start
 docker compose up -d --build
-
-# view logs
 docker compose logs -f strata
 ```
 
@@ -112,7 +91,84 @@ The container expects a `TZ` environment variable (e.g. in a `.env` file):
 TZ=Europe/Rome
 ```
 
-The media volume must be writable by the container process. On the reference deployment it maps `/mnt/raid/strata/media` → `/media`.
+The media volume must be writable by the container. On the reference deployment it maps `/mnt/raid/strata/media` → `/media`.
+
+---
+
+### Run from source
+
+```bash
+# 1. Install dependencies
+pip install -r strata/requirements.txt   # skip gunicorn on Windows/macOS
+pip install -r desktop/requirements.txt
+
+# 2. Generate placeholder icons (once)
+python desktop/assets/generate_icon.py
+
+# 3. Run
+python desktop/main.py
+```
+
+Or without the tray, using the Flask dev server:
+
+```bash
+cd strata
+MEDIA_ROOT=./media flask run   # Windows: set MEDIA_ROOT=.\media
+```
+
+See [desktop/README.md](desktop/README.md) for building a distributable installer from source.
+
+---
+
+## Stack
+
+| Layer | Technology |
+|---|---|
+| Backend | Python 3.12, Flask 3, Waitress (desktop) / Gunicorn (Docker) |
+| Audio download | yt-dlp + ffmpeg |
+| Frontend | Vanilla JS, Web Audio API |
+| Storage | Flat files (JSON + mp3 + thumbnail) + SQLite (telemetry) |
+| Desktop wrapper | pystray, PyInstaller |
+| Container | Docker, linux/arm64 |
+
+## Project structure
+
+```
+strata/                 # Flask app (shared by both targets)
+├── app.py              # API + download jobs + DB telemetry
+├── wsgi.py             # Gunicorn entry point (Docker)
+├── requirements.txt
+├── Dockerfile
+├── templates/index.html
+└── static/
+    ├── css/style.css
+    └── js/app.js
+desktop/                # Native desktop wrapper
+├── main.py             # pystray entry point, starts waitress
+├── requirements.txt
+├── README.md           # Desktop build guide
+├── assets/
+│   ├── generate_icon.py
+│   └── bin/            # Place yt-dlp + ffmpeg binaries here
+└── build/
+    ├── strata.spec     # PyInstaller spec
+    └── installer.iss   # Inno Setup (Windows)
+docker-compose.yml
+```
+
+Media layout:
+
+```
+<MEDIA_ROOT>/
+├── tracks/<uuid>/
+│   ├── audio.mp3
+│   ├── thumbnail.jpg
+│   └── meta.json
+├── presets/<name>.json
+└── telemetry.db
+```
+
+---
 
 ## Environment variables
 
@@ -120,7 +176,7 @@ The media volume must be writable by the container process. On the reference dep
 |---|---|---|
 | `MEDIA_ROOT` | `/media` | Root path for tracks, presets, and telemetry DB |
 | `TZ` | — | Timezone for timestamp display |
-| `FLASK_ENV` | `production` | Set to `development` for debug mode locally |
+| `FLASK_ENV` | `production` | Set to `development` for debug mode |
 
 ## API routes
 
@@ -130,11 +186,11 @@ The media volume must be writable by the container process. On the reference dep
 | `POST` | `/api/tracks` | Upload an audio file |
 | `PATCH` | `/api/tracks/<id>` | Update track metadata |
 | `DELETE` | `/api/tracks/<id>` | Delete track and all its files |
-| `GET` | `/api/tracks/<id>/thumbnail` | Serve thumbnail image |
-| `GET` | `/api/tracks/<id>/audio` | Serve audio file |
+| `GET` | `/api/tracks/<id>/thumbnail` | Serve thumbnail |
+| `GET` | `/api/tracks/<id>/audio` | Serve audio |
 | `POST` | `/api/download` | Queue a yt-dlp download job |
-| `GET` | `/api/jobs/<id>` | Poll a download job's status |
-| `GET` | `/api/presets` | List saved presets |
+| `GET` | `/api/jobs/<id>` | Poll download job status |
+| `GET` | `/api/presets` | List presets |
 | `POST` | `/api/presets` | Save a preset |
 | `DELETE` | `/api/presets/<name>` | Delete a preset |
 | `GET` | `/api/stats` | Listening time and play-count stats |
@@ -142,15 +198,21 @@ The media volume must be writable by the container process. On the reference dep
 
 ## Segment auto-detection
 
-When a video is downloaded, segments are built from (in order of preference):
+When a track is downloaded, segments are built from (in order of preference):
 
-1. **yt-dlp native chapters** — from the video's chapter markers
-2. **Description parsing** — timestamps found anywhere in each line; supports formats like `[00:00]`, `00:00`, `01:01:30`, with or without leading track numbers and URLs on the same line
+1. **yt-dlp chapters** — from the video's native chapter markers
+2. **Description parsing** — timestamps found in the description; supports `[00:00]`, `00:00`, `01:01:30`, with or without track numbers or trailing URLs
 
-If description parsing yields more segments than native chapters, it wins. You can also paste a tracklist manually in the track editor and click **Parse**.
+If description parsing yields more segments than native chapters, it wins. You can also paste a tracklist manually in the editor and click **Parse**.
 
-## Notes
+---
 
-- The same track can be added to the Queue multiple times (each gets a unique slot)
-- YouTube URLs are cleaned to `?v=VIDEO_ID` only before download to avoid accidental playlist fetches; `--no-playlist` is also passed to yt-dlp
-- Telemetry (play events) is stored locally in SQLite and purged of orphaned entries once per day
+## Disclaimer
+
+Strata is a personal-use tool. You are responsible for ensuring that any audio you download complies with the terms of service of the source platform and applicable copyright law. The authors make no representations regarding the legality of downloading specific content.
+
+---
+
+## License
+
+[MIT](LICENSE) © Claudio Bedini

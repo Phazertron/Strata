@@ -13,6 +13,11 @@ import os
 import sys
 from pathlib import Path
 
+# Force UTF-8 stdout so the ✓ checkmark prints on Windows CI runners
+if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+
 try:
     from PIL import Image, ImageDraw, ImageFont
 except ImportError:

@@ -15,6 +15,10 @@ A self-hosted ambient sound mixer for layering music, soundscapes, and audio tra
 - **Stats** — listening time (all time / 30 days / 7 days), most played, most listened by time, recently played
 - **Segment bar** — visual timeline of segments in the mixer; hover any chip for an instant name + time preview
 
+## Disclaimer
+
+Strata is a personal-use tool. You are responsible for ensuring that any audio you download complies with the terms of service of the source platform and applicable copyright law. The authors make no representations regarding the legality of downloading specific content.
+
 ## Stack
 
 | Layer | Technology |
@@ -29,9 +33,9 @@ A self-hosted ambient sound mixer for layering music, soundscapes, and audio tra
 ## Project structure
 
 ```
-strata/
+strata/                 # Flask app (shared by both deployment targets)
 ├── app.py              # Flask API + download jobs + DB telemetry
-├── wsgi.py             # Gunicorn entry point
+├── wsgi.py             # Gunicorn entry point (Docker)
 ├── requirements.txt
 ├── Dockerfile
 ├── templates/
@@ -39,6 +43,16 @@ strata/
 └── static/
     ├── css/style.css
     └── js/app.js       # All UI logic (mixer, library, modals, audio engine)
+desktop/                # Native desktop wrapper (tray / menu-bar app)
+├── main.py             # pystray entry point, starts waitress server
+├── requirements.txt
+├── README.md           # Desktop build guide
+├── assets/
+│   ├── generate_icon.py
+│   └── bin/            # Place yt-dlp + ffmpeg binaries here for bundling
+└── build/
+    ├── strata.spec     # PyInstaller spec (Windows + macOS)
+    └── installer.iss   # Inno Setup script (Windows installer wizard)
 docker-compose.yml
 ```
 
@@ -58,10 +72,25 @@ Media is stored outside the container and mounted at `/media`:
 
 ## Running locally
 
+### Desktop app (system tray / menu bar)
+
+The easiest way to run Strata on a personal machine — starts a local server and adds a tray icon with an **Open** shortcut.
+
+```bash
+pip install -r strata/requirements.txt   # skip gunicorn errors on Windows/macOS
+pip install -r desktop/requirements.txt
+python desktop/assets/generate_icon.py   # once, to create icons
+python desktop/main.py
+```
+
+See [desktop/README.md](desktop/README.md) for building a distributable installer.
+
+### Flask dev server (no tray icon)
+
 ```bash
 cd strata
 pip install -r requirements.txt
-# ffmpeg must be installed separately
+# ffmpeg and yt-dlp must be on PATH
 MEDIA_ROOT=./media flask run
 ```
 

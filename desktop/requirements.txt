@@ -1,0 +1,9 @@
+# Desktop wrapper dependencies
+# Install strata/requirements.txt first, then this file:
+#   pip install -r strata/requirements.txt
+#   pip install -r desktop/requirements.txt
+# Note: gunicorn in strata/requirements.txt is Linux-only and can be skipped on Windows/macOS
+pystray>=0.19.5
+Pillow>=10.0.0
+waitress>=3.0.0
+pyinstaller>=6.0.0

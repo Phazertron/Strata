@@ -115,8 +115,19 @@ def _quit_app(icon: pystray.Icon, _item: pystray.MenuItem) -> None:
     os._exit(0)     # forcibly terminate waitress daemon threads
 
 
+def _fallback_icon(size: int = 64) -> "Image.Image":
+    """Generate a minimal placeholder icon if icon.png is missing."""
+    from PIL import ImageDraw
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    m = size // 8
+    d.rounded_rectangle([m, m, size - m, size - m], radius=size // 5, fill=(99, 102, 241, 255))
+    return img
+
+
 def _build_tray() -> pystray.Icon:
-    image = Image.open(_asset("icon.png"))
+    icon_path = _asset("icon.png")
+    image = Image.open(icon_path) if os.path.exists(icon_path) else _fallback_icon()
     menu = pystray.Menu(
         pystray.MenuItem("Open Strata", _open_browser, default=True),
         pystray.Menu.SEPARATOR,

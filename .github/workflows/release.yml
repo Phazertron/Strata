@@ -1,0 +1,142 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────────
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: |
+          pip install -r strata/requirements.txt --ignore-requires-python
+          pip install -r desktop/requirements.txt
+
+      - name: Download yt-dlp and ffmpeg
+        shell: pwsh
+        run: |
+          $bin = "desktop\assets\bin"
+          New-Item -ItemType Directory -Force $bin | Out-Null
+
+          # yt-dlp
+          Invoke-WebRequest -Uri "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" `
+            -OutFile "$bin\yt-dlp.exe"
+
+          # ffmpeg (gyan.dev static build)
+          $ffzip = "$env:TEMP\ffmpeg.zip"
+          Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" `
+            -OutFile $ffzip
+          Expand-Archive $ffzip -DestinationPath "$env:TEMP\ffmpeg"
+          $ffdir = Get-ChildItem "$env:TEMP\ffmpeg" -Directory | Select-Object -First 1
+          Copy-Item "$($ffdir.FullName)\bin\ffmpeg.exe" "$bin\ffmpeg.exe"
+          Copy-Item "$($ffdir.FullName)\bin\ffprobe.exe" "$bin\ffprobe.exe"
+
+      - name: Generate icons
+        run: python desktop/assets/generate_icon.py
+
+      - name: Build with PyInstaller
+        run: pyinstaller desktop/build/strata.spec
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          & $iscc "desktop\build\installer.iss"
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: dist/installer/Strata-Setup-*.exe
+          retention-days: 1
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: |
+          pip install -r strata/requirements.txt
+          pip install -r desktop/requirements.txt
+          # pystray macOS backend needs this
+          pip install pyobjc-framework-Cocoa
+
+      - name: Install ffmpeg
+        run: brew install ffmpeg
+
+      - name: Download yt-dlp
+        run: |
+          mkdir -p desktop/assets/bin
+          curl -L "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos" \
+            -o desktop/assets/bin/yt-dlp
+          chmod +x desktop/assets/bin/yt-dlp
+          # copy ffmpeg/ffprobe from brew into assets/bin
+          cp "$(which ffmpeg)"  desktop/assets/bin/ffmpeg
+          cp "$(which ffprobe)" desktop/assets/bin/ffprobe
+
+      - name: Generate icons
+        run: python desktop/assets/generate_icon.py
+
+      - name: Build with PyInstaller
+        run: pyinstaller desktop/build/strata.spec
+
+      - name: Create DMG
+        run: |
+          hdiutil create \
+            -volname "Strata" \
+            -srcfolder "dist/Strata.app" \
+            -ov \
+            -format UDZO \
+            dist/Strata.dmg
+
+      - name: Upload macOS DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg
+          path: dist/Strata.dmg
+          retention-days: 1
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  release:
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Windows installer
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-installer
+          path: artifacts/
+
+      - name: Download macOS DMG
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-dmg
+          path: artifacts/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          prerelease: ${{ startsWith(github.ref_name, 'v0.') || contains(github.ref_name, '-') }}
+          generate_release_notes: true

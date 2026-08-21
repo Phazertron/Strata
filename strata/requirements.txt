@@ -1,3 +1,4 @@
 flask>=3.0
 gunicorn>=21.0   # Docker/Linux only — safe to skip on Windows/macOS
 yt-dlp[default]>=2024.1.1  # [default] extra bundles EJS scripts yt-dlp needs to solve YouTube's JS challenge
+bgutil-ytdlp-pot-provider   # generates PO tokens; without this, YouTube 403s mid-download on throttled clients

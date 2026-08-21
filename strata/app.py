@@ -150,6 +150,7 @@ def _run_download_job(job_id: str, url: str, track_id: str, track_dir: Path):
             "--write-thumbnail",
             "--write-info-json",
             "--convert-thumbnails", "jpg",
+            "--extractor-args", "youtubepot-bgutilscript:server_home=/root/bgutil-ytdlp-pot-provider/server",
             "-o", str(track_dir / "track.%(ext)s"),
             url,
         ]
@@ -235,6 +236,7 @@ def _run_repair_job(job_id: str, url: str, track_id: str, track_dir: Path):
             "--audio-format", "m4a",
             "--audio-quality", "0",
             "--postprocessor-args", f"ffmpeg:-b:a {quality}",
+            "--extractor-args", "youtubepot-bgutilscript:server_home=/root/bgutil-ytdlp-pot-provider/server",
             "-o", str(track_dir / "track.%(ext)s"),
             url,
         ]

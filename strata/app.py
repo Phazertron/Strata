@@ -3,6 +3,7 @@ import re
 import uuid
 import json
 import shutil
+import signal
 import subprocess
 import sqlite3
 import threading
@@ -29,6 +30,7 @@ app = Flask(__name__, static_folder="static", template_folder="templates")
 
 _jobs: dict = {}          # job_id → {status, url, track_id, track?, error?}
 _jobs_lock = threading.Lock()
+_procs: dict = {}         # job_id → running yt-dlp Popen (kept apart from _jobs, which is JSON-served)
 
 # ---------------------------------------------------------------------------
 # Log buffer (ring buffer, last 200 entries)
@@ -79,6 +81,8 @@ def _clean_url(url: str) -> str:
             qs = urllib.parse.parse_qs(p.query)
             if "v" in qs:
                 return f"https://www.youtube.com/watch?v={qs['v'][0]}"
+        if p.hostname == "youtu.be" and p.path.strip("/"):
+            return f"https://www.youtube.com/watch?v={p.path.strip('/')}"
     except Exception:
         pass
     return url
@@ -133,9 +137,38 @@ def _parse_description_chapters(description: str, total_duration: float | None) 
 # Download jobs
 # ---------------------------------------------------------------------------
 
-def _run_download_job(job_id: str, url: str, track_id: str, track_dir: Path):
+def _kill_proc_tree(proc: subprocess.Popen):
+    """Kill yt-dlp and its ffmpeg children."""
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True)
+    else:
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+
+
+def _run_ytdlp(job_id: str, cmd: list, cwd: Path):
+    """Run yt-dlp as a cancellable subprocess.
+    Returns (returncode, stderr), or None if the job was cancelled."""
+    group_kw = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt"
+                else {"start_new_session": True})
     with _jobs_lock:
+        if _jobs[job_id]["status"] == "cancelled":
+            return None
         _jobs[job_id]["status"] = "running"
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                                text=True, cwd=str(cwd), **group_kw)
+        _procs[job_id] = proc
+    _, stderr = proc.communicate()
+    with _jobs_lock:
+        _procs.pop(job_id, None)
+        if _jobs[job_id]["status"] == "cancelled":
+            return None
+    return proc.returncode, stderr
+
+
+def _run_download_job(job_id: str, url: str, track_id: str, track_dir: Path):
     _log(f"Download started: {url}")
     try:
         settings = load_settings()
@@ -154,12 +187,17 @@ def _run_download_job(job_id: str, url: str, track_id: str, track_dir: Path):
             "-o", str(track_dir / "track.%(ext)s"),
             url,
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(track_dir))
-        if result.returncode != 0:
+        result = _run_ytdlp(job_id, cmd, track_dir)
+        if result is None:
             shutil.rmtree(track_dir, ignore_errors=True)
-            _log(f"Download failed: {url} — {result.stderr[-200:]}")
+            _log(f"Download cancelled: {url}")
+            return
+        returncode, stderr = result
+        if returncode != 0:
+            shutil.rmtree(track_dir, ignore_errors=True)
+            _log(f"Download failed: {url} — {stderr[-200:]}")
             with _jobs_lock:
-                _jobs[job_id].update({"status": "error", "error": result.stderr[-2000:]})
+                _jobs[job_id].update({"status": "error", "error": stderr[-2000:]})
             return
 
         for _ext in ("m4a", "mp3"):
@@ -223,8 +261,6 @@ def _run_download_job(job_id: str, url: str, track_id: str, track_dir: Path):
 def _run_repair_job(job_id: str, url: str, track_id: str, track_dir: Path):
     """Re-download audio for a track whose file went missing.
     Preserves existing metadata, segments, and custom thumbnail on failure."""
-    with _jobs_lock:
-        _jobs[job_id]["status"] = "running"
     _log(f"Repair download started: {url}")
     try:
         settings = load_settings()
@@ -240,11 +276,17 @@ def _run_repair_job(job_id: str, url: str, track_id: str, track_dir: Path):
             "-o", str(track_dir / "track.%(ext)s"),
             url,
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(track_dir))
-        if result.returncode != 0:
-            _log(f"Repair failed for {track_id}: {result.stderr[-200:]}")
+        result = _run_ytdlp(job_id, cmd, track_dir)
+        if result is None:
+            for partial in track_dir.glob("track.*"):
+                partial.unlink(missing_ok=True)
+            _log(f"Repair cancelled for {track_id}")
+            return
+        returncode, stderr = result
+        if returncode != 0:
+            _log(f"Repair failed for {track_id}: {stderr[-200:]}")
             with _jobs_lock:
-                _jobs[job_id].update({"status": "error", "error": result.stderr[-2000:]})
+                _jobs[job_id].update({"status": "error", "error": stderr[-2000:]})
             return
 
         for _ext in ("m4a", "mp3"):
@@ -803,13 +845,21 @@ def download_track():
     if not url:
         return jsonify({"error": "url required"}), 400
 
+    existing = next((t for t in all_tracks()
+                     if _clean_url(t.get("source_url") or "") == url), None)
+    if existing:
+        return jsonify({"error": f"Already in library: {existing.get('title', url)}"}), 409
+
     job_id    = str(uuid.uuid4())
     track_id  = str(uuid.uuid4())
     track_dir = TRACKS_DIR / track_id
-    track_dir.mkdir(parents=True)
 
+    # Check + insert under one lock so a double-click can't queue the same URL twice
     with _jobs_lock:
+        if any(j["url"] == url and j["status"] in ("queued", "running") for j in _jobs.values()):
+            return jsonify({"error": "This URL is already downloading"}), 409
         _jobs[job_id] = {"status": "queued", "url": url, "track_id": track_id}
+    track_dir.mkdir(parents=True)
 
     threading.Thread(
         target=_run_download_job,
@@ -833,6 +883,22 @@ def get_job(job_id):
     if job is None:
         abort(404)
     return jsonify(job)
+
+
+@app.route("/api/jobs/<job_id>/cancel", methods=["POST"])
+def cancel_job(job_id):
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if job is None:
+            abort(404)
+        if job["status"] not in ("queued", "running"):
+            return jsonify({"error": f"Job already {job['status']}"}), 409
+        job["status"] = "cancelled"
+        proc = _procs.get(job_id)
+        snapshot = dict(job)
+    if proc:
+        _kill_proc_tree(proc)
+    return jsonify(snapshot)
 
 
 # ---------------------------------------------------------------------------

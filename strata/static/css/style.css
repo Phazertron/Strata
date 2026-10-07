@@ -1218,6 +1218,20 @@ details[open] .parse-tracklist-summary::before { content: "▾"; }
 }
 .job-dismiss:hover { color: var(--text); }
 
+.job-cancel {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px 8px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.job-cancel:hover { color: var(--danger); border-color: var(--danger); }
+.job-item.job-cancelled .job-label { color: var(--text-dim); text-decoration: line-through; }
+
 /* ── Settings view ────────────────────────────────────────────────────────── */
 #settings-view {
   display: none;

@@ -72,7 +72,7 @@ Output:
    ```
    iscc desktop\build\installer.iss
    ```
-3. Installer appears at `dist/installer/Strata-Setup-1.0.0.exe`
+3. Installer appears at `dist/installer/Strata-Setup-1.1.0.exe`
 
 The installer:
 - Installs per-user (no admin required)

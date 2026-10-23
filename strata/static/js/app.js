@@ -1268,20 +1268,32 @@ function renderJobQueue() {
   for (const [id, job] of entries) {
     const item = document.createElement("div");
     item.className = `job-item job-${job.status}`;
-    const icon  = { queued:"⏳", running:"⬇", done:"✓", error:"✗" }[job.status] || "?";
+    const icon  = { queued:"⏳", running:"⬇", done:"✓", error:"✗", cancelled:"⊘" }[job.status] || "?";
     const label = job.track?.title || job.url;
+    const isActive = job.status === "queued" || job.status === "running";
     item.innerHTML = `
       <span class="job-icon">${icon}</span>
       ${job.status === "running" ? `<span class="spinner"></span>` : ""}
       <span class="job-label">${esc(label.length > 48 ? label.slice(0,45)+"…" : label)}</span>
-      ${(job.status === "done" || job.status === "error")
-        ? `<button class="job-dismiss" data-jid="${id}">✕</button>` : ""}
+      ${isActive
+        ? `<button class="job-cancel" data-jid="${id}" title="Cancel download">Cancel</button>`
+        : `<button class="job-dismiss" data-jid="${id}">✕</button>`}
     `;
     if (job.status === "running") item.querySelector(".job-icon").remove();
     container.appendChild(item);
   }
   container.querySelectorAll(".job-dismiss").forEach(btn =>
     btn.addEventListener("click", () => { delete activeJobs[btn.dataset.jid]; renderJobQueue(); }));
+  container.querySelectorAll(".job-cancel").forEach(btn =>
+    btn.addEventListener("click", () => cancelJob(btn.dataset.jid)));
+}
+
+async function cancelJob(jobId) {
+  try {
+    const job = await api("POST", `/jobs/${jobId}/cancel`);
+    if (activeJobs[jobId]) { activeJobs[jobId] = job; renderJobQueue(); }
+    toast("Download cancelled");
+  } catch (err) { toast(err.message, true); }
 }
 
 function startPolling() {
@@ -1307,6 +1319,9 @@ function startPolling() {
 }
 
 async function submitDownload(url) {
+  const dup = Object.values(activeJobs).some(j =>
+    j.url === url && (j.status === "queued" || j.status === "running"));
+  if (dup) { toast("This URL is already downloading", true); return false; }
   try {
     const res = await api("POST", "/download", { url });
     activeJobs[res.job_id] = { status: "queued", url };
@@ -1360,10 +1375,17 @@ async function uploadFile(file) {
 
 document.getElementById("download-btn").addEventListener("click", async () => {
   const input = document.getElementById("yt-url");
+  const btn    = document.getElementById("download-btn");
+  const status = document.getElementById("download-status");
   const url = input.value.trim();
-  if (!url) return;
-  const ok = await submitDownload(url);
-  if (ok) { input.value = ""; document.getElementById("download-status").textContent = "Queued — track will appear in library when done."; }
+  if (!url || btn.disabled) return;
+  btn.disabled = true;
+  status.innerHTML = `<span class="spinner"></span> Submitting…`;
+  try {
+    const ok = await submitDownload(url);
+    if (ok) { input.value = ""; status.textContent = "Queued — track will appear in library when done."; }
+    else status.textContent = "";
+  } finally { btn.disabled = false; }
 });
 
 // ---------------------------------------------------------------------------
@@ -1776,10 +1798,12 @@ async function refreshBgTasks() {
     }
 
     const dlEl  = document.getElementById("bg-downloads");
-    const active = Object.values(jobs).filter(j => j.status === "queued" || j.status === "running");
+    const active = Object.entries(jobs).filter(([, j]) => j.status === "queued" || j.status === "running");
     if (active.length) {
       dlEl.innerHTML = `<span class="bg-task-label">Downloads in progress: ${active.length}</span>` +
-        active.map(j => `<div class="bg-task-item"><span class="spinner" style="width:12px;height:12px;border-width:1.5px"></span> ${esc((j.track?.title || j.url || "").slice(0, 60))}</div>`).join("");
+        active.map(([id, j]) => `<div class="bg-task-item"><span class="spinner" style="width:12px;height:12px;border-width:1.5px"></span> ${esc((j.track?.title || j.url || "").slice(0, 60))} <button class="job-cancel" data-jid="${id}" title="Cancel download">Cancel</button></div>`).join("");
+      dlEl.querySelectorAll(".job-cancel").forEach(btn =>
+        btn.addEventListener("click", async () => { await cancelJob(btn.dataset.jid); await refreshBgTasks(); }));
     } else {
       dlEl.innerHTML = `<span class="bg-task-label dim">No active downloads</span>`;
     }
@@ -1831,7 +1855,7 @@ function startRepairPoll() {
       let changed = false;
       for (const job of Object.values(jobs)) {
         if (!job.track_id || !_repairingTracks.has(job.track_id)) continue;
-        if (job.status === "done") {
+        if (job.status === "done" || job.status === "cancelled") {
           _repairingTracks.delete(job.track_id);
           changed = true;
         } else if (job.status === "error") {

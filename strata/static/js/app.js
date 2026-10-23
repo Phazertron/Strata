@@ -1757,9 +1757,55 @@ async function loadSettingsView() {
     const radios = document.querySelectorAll('input[name="quality"]');
     radios.forEach(r => { r.checked = r.value === s.audio_quality; });
   } catch { /* non-fatal */ }
+  await refreshDownloaderVersions();
   await refreshBgTasks();
   await refreshLogs();
 }
+
+function renderDownloaderVersions(v) {
+  const el = document.getElementById("dl-versions");
+  const row = (label, val) => `<div class="bg-task-item"><span class="bg-task-label">${label}:</span> ${esc(val || "not installed")}</div>`;
+  let html = row("yt-dlp", v.yt_dlp);
+  if (!v.frozen) {
+    html += row("PO token plugin", v.pot_plugin) + row("PO token script", v.pot_script);
+  }
+  if (v.mismatch) {
+    html += `<div class="bg-task-item" style="color:var(--danger)">⚠ Plugin and script versions don't match — downloads will fail until you update.</div>`;
+  }
+  el.innerHTML = html;
+}
+
+async function refreshDownloaderVersions() {
+  try {
+    renderDownloaderVersions(await api("GET", "/admin/versions"));
+  } catch { /* non-fatal */ }
+}
+
+document.getElementById("update-downloader-btn").addEventListener("click", async () => {
+  const btn     = document.getElementById("update-downloader-btn");
+  const spinner = document.getElementById("update-downloader-spinner");
+  const out     = document.getElementById("update-downloader-output");
+  btn.disabled = true;
+  spinner.style.display = "inline";
+  out.style.display = "none";
+  try {
+    const r = await fetch("/api/admin/update-downloader", { method: "POST" });
+    const data = await r.json().catch(() => ({ error: r.statusText }));
+    if (data.after) renderDownloaderVersions(data.after);
+    if (data.output) {
+      out.textContent = data.output;
+      out.style.display = "block";
+    }
+    if (!r.ok) throw new Error(data.error || r.statusText);
+    toast(`Updated — yt-dlp ${data.after.yt_dlp}`);
+  } catch (err) {
+    toast(`Update failed: ${err.message}`, true);
+  } finally {
+    btn.disabled = false;
+    spinner.style.display = "none";
+    await refreshLogs();
+  }
+});
 
 async function refreshBgTasks() {
   try {

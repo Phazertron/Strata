@@ -2,6 +2,7 @@ import os
 import re
 import uuid
 import json
+import sys
 import shutil
 import signal
 import subprocess
@@ -21,6 +22,11 @@ DB_PATH     = MEDIA_ROOT / "telemetry.db"
 SETTINGS_PATH = MEDIA_ROOT / "settings.json"
 
 DEFAULT_SETTINGS = {"audio_quality": "192k"}
+
+# bgutil PO token provider script (cloned in the Dockerfile). Its major
+# version must match the bgutil-ytdlp-pot-provider pip plugin.
+POT_SERVER_HOME = Path(os.environ.get("POT_SERVER_HOME", "/root/bgutil-ytdlp-pot-provider/server"))
+POT_REPO        = "https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git"
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
 
@@ -183,7 +189,7 @@ def _run_download_job(job_id: str, url: str, track_id: str, track_dir: Path):
             "--write-thumbnail",
             "--write-info-json",
             "--convert-thumbnails", "jpg",
-            "--extractor-args", "youtubepot-bgutilscript:server_home=/root/bgutil-ytdlp-pot-provider/server",
+            "--extractor-args", f"youtubepot-bgutilscript:server_home={POT_SERVER_HOME}",
             "-o", str(track_dir / "track.%(ext)s"),
             url,
         ]
@@ -272,7 +278,7 @@ def _run_repair_job(job_id: str, url: str, track_id: str, track_dir: Path):
             "--audio-format", "m4a",
             "--audio-quality", "0",
             "--postprocessor-args", f"ffmpeg:-b:a {quality}",
-            "--extractor-args", "youtubepot-bgutilscript:server_home=/root/bgutil-ytdlp-pot-provider/server",
+            "--extractor-args", f"youtubepot-bgutilscript:server_home={POT_SERVER_HOME}",
             "-o", str(track_dir / "track.%(ext)s"),
             url,
         ]
@@ -899,6 +905,112 @@ def cancel_job(job_id):
     if proc:
         _kill_proc_tree(proc)
     return jsonify(snapshot)
+
+
+# ---------------------------------------------------------------------------
+# Downloader versions + self-update (yt-dlp, PO token plugin + script)
+# ---------------------------------------------------------------------------
+
+_update_lock = threading.Lock()
+
+
+def _major(ver: str | None) -> str | None:
+    return ver.split(".", 1)[0] if ver else None
+
+
+def _pip_version(name: str) -> str | None:
+    import importlib, importlib.metadata  # noqa: E401, PLC0415
+    importlib.invalidate_caches()  # pick up packages upgraded since startup
+    try:
+        return importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
+def _downloader_versions() -> dict:
+    try:
+        r = subprocess.run(["yt-dlp", "--version"], capture_output=True, text=True, timeout=30)
+        ytdlp = r.stdout.strip() or None
+    except Exception:
+        ytdlp = None
+    plugin = _pip_version("bgutil-ytdlp-pot-provider")
+    script = None
+    try:
+        script = json.loads((POT_SERVER_HOME / "package.json").read_text()).get("version")
+    except Exception:
+        pass
+    return {
+        "yt_dlp": ytdlp,
+        "pot_plugin": plugin,
+        "pot_script": script,
+        "mismatch": bool(plugin and script and _major(plugin) != _major(script)),
+        # Frozen desktop builds ship yt-dlp as a standalone binary (no pip, no plugin)
+        "frozen": bool(getattr(sys, "frozen", False)),
+    }
+
+
+def _run_step(cmd: list[str], output: list[str], cwd: str | None = None, timeout: int = 300):
+    output.append("$ " + " ".join(cmd))
+    r = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd, timeout=timeout)
+    output.append((r.stdout + r.stderr).strip()[-3000:])
+    if r.returncode != 0:
+        raise RuntimeError(f"{cmd[0]} exited with {r.returncode}")
+
+
+def _install_pot_script(version: str, output: list[str]):
+    """Clone the PO token script at `version` beside the current one, then swap it in."""
+    repo_dir = POT_SERVER_HOME.parent
+    new_dir  = repo_dir.with_name(repo_dir.name + ".new")
+    old_dir  = repo_dir.with_name(repo_dir.name + ".old")
+    shutil.rmtree(new_dir, ignore_errors=True)
+    shutil.rmtree(old_dir, ignore_errors=True)
+    try:
+        _run_step(["git", "clone", "--single-branch", "--branch", version, "--depth", "1",
+                   POT_REPO, str(new_dir)], output)
+        _run_step(["deno", "install", "--allow-scripts=npm:canvas", "--frozen"], output,
+                  cwd=str(new_dir / POT_SERVER_HOME.name), timeout=600)
+    except Exception:
+        shutil.rmtree(new_dir, ignore_errors=True)
+        raise
+    if repo_dir.exists():
+        repo_dir.rename(old_dir)
+    new_dir.rename(repo_dir)
+    shutil.rmtree(old_dir, ignore_errors=True)
+
+
+@app.route("/api/admin/versions", methods=["GET"])
+def downloader_versions():
+    return jsonify(_downloader_versions())
+
+
+@app.route("/api/admin/update-downloader", methods=["POST"])
+def update_downloader():
+    """Upgrade yt-dlp and the PO token plugin, then fetch the matching PO token script."""
+    if not _update_lock.acquire(blocking=False):
+        return jsonify({"error": "An update is already running"}), 409
+    output: list[str] = []
+    before = _downloader_versions()
+    _log("Downloader update started")
+    try:
+        if before["frozen"]:
+            _run_step(["yt-dlp", "-U"], output)
+        else:
+            _run_step([sys.executable, "-m", "pip", "install", "--no-cache-dir",
+                       "--disable-pip-version-check", "--root-user-action=ignore",
+                       "-U", "yt-dlp[default]", "bgutil-ytdlp-pot-provider"], output, timeout=600)
+            plugin = _pip_version("bgutil-ytdlp-pot-provider")
+            if plugin and plugin != before["pot_script"]:
+                _install_pot_script(plugin, output)
+        after = _downloader_versions()
+        _log(f"Downloader updated: yt-dlp {after['yt_dlp']}, "
+             f"PO plugin {after['pot_plugin']}, PO script {after['pot_script']}")
+        return jsonify({"before": before, "after": after, "output": "\n".join(output)})
+    except Exception as exc:
+        _log(f"Downloader update failed: {exc}")
+        return jsonify({"error": str(exc), "output": "\n".join(output),
+                        "after": _downloader_versions()}), 500
+    finally:
+        _update_lock.release()
 
 
 # ---------------------------------------------------------------------------

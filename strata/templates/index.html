@@ -128,6 +128,17 @@
       </div>
 
       <div class="settings-section">
+        <h2>Downloader</h2>
+        <p class="settings-hint">YouTube changes often. If downloads start failing, update yt-dlp and the PO token provider here.</p>
+        <div id="dl-versions" class="bg-task-row"></div>
+        <div style="margin-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <button id="update-downloader-btn" class="btn">⟳ Update</button>
+          <span id="update-downloader-spinner" style="display:none"><span class="spinner"></span> Updating… this can take a couple of minutes</span>
+        </div>
+        <pre id="update-downloader-output" class="log-panel" style="display:none;margin-top:10px;white-space:pre-wrap"></pre>
+      </div>
+
+      <div class="settings-section">
         <h2>Background tasks</h2>
         <div id="bg-conversions" class="bg-task-row"></div>
         <div id="bg-downloads"   class="bg-task-row" style="margin-top:6px"></div>

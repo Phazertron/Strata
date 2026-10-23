@@ -25,8 +25,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 # check, on top of EJS) — without it, downloads start but get 403'd mid-stream
 # on throttled clients. Script mode just needs the repo's server/ dir + Deno
 # on PATH, so no extra server process is required.
+# The script's major version must match the pip plugin's, so clone the tag
+# matching whatever pip just installed (the app's Settings → Update button
+# does the same at runtime).
 # https://github.com/Brainicism/bgutil-ytdlp-pot-provider
-RUN git clone --single-branch --branch 1.3.2 --depth 1 \
+RUN POT_VER=$(python -c "import importlib.metadata as m; print(m.version('bgutil-ytdlp-pot-provider'))") \
+    && git clone --single-branch --branch "$POT_VER" --depth 1 \
       https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git \
       /root/bgutil-ytdlp-pot-provider \
     && cd /root/bgutil-ytdlp-pot-provider/server \

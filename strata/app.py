@@ -8,6 +8,7 @@ import signal
 import subprocess
 import sqlite3
 import threading
+import time
 import collections
 import urllib.parse
 from datetime import datetime, timezone
@@ -939,7 +940,7 @@ def _downloader_versions() -> dict:
         script = json.loads((POT_SERVER_HOME / "package.json").read_text()).get("version")
     except Exception:
         pass
-    return {
+    result = {
         "yt_dlp": ytdlp,
         "pot_plugin": plugin,
         "pot_script": script,
@@ -947,6 +948,20 @@ def _downloader_versions() -> dict:
         # Frozen desktop builds ship yt-dlp as a standalone binary (no pip, no plugin)
         "frozen": bool(getattr(sys, "frozen", False)),
     }
+    global _versions_cache
+    _versions_cache = (time.monotonic(), result)
+    return result
+
+
+_versions_cache: tuple[float, dict] | None = None
+
+
+def _cached_downloader_versions(max_age: float = 600) -> dict:
+    """Versions without spawning yt-dlp on every call (the status widget polls often)."""
+    cached = _versions_cache
+    if cached and time.monotonic() - cached[0] < max_age:
+        return cached[1]
+    return _downloader_versions()
 
 
 def _run_step(cmd: list[str], output: list[str], cwd: str | None = None, timeout: int = 300):
@@ -1309,6 +1324,76 @@ def track_stats(track_id):
             FROM play_events WHERE track_id = ?
         """, (track_id,)).fetchone()
     return jsonify(dict(row))
+
+
+# ---------------------------------------------------------------------------
+# Health + status (homepage dashboard widget)
+# ---------------------------------------------------------------------------
+
+@app.route("/health")
+def health():
+    """Liveness for monitors: telemetry DB readable and media folder writable."""
+    problems = []
+    try:
+        with get_db() as conn:
+            conn.execute("SELECT 1 FROM play_events LIMIT 1").fetchall()
+    except Exception as exc:
+        problems.append(f"db: {exc}")
+    if not os.access(TRACKS_DIR, os.W_OK):
+        problems.append("media: tracks folder not writable")
+    if problems:
+        return jsonify({"status": "error", "problems": problems}), 503
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/status")
+def status():
+    """Flat summary for dashboards (gethomepage customapi widget)."""
+    tracks = sum(1 for d in TRACKS_DIR.iterdir() if (d / "metadata.json").exists()) \
+        if TRACKS_DIR.exists() else 0
+    presets = sum(1 for _ in PRESETS_DIR.glob("*.json")) if PRESETS_DIR.exists() else 0
+
+    minutes_sql = """
+        SELECT ROUND(COALESCE(SUM((JULIANDAY(ended_at) - JULIANDAY(started_at)) * 1440), 0), 1)
+        FROM play_events WHERE ended_at IS NOT NULL AND JULIANDAY(started_at) >= JULIANDAY(?)
+    """
+    with get_db() as conn:
+        # Local midnight (container TZ) expressed in UTC, since events are stored as UTC ISO strings
+        today_start = conn.execute(
+            "SELECT datetime('now', 'localtime', 'start of day', 'utc')").fetchone()[0]
+        today_min = conn.execute(minutes_sql, (today_start,)).fetchone()[0]
+        week_min = conn.execute(
+            minutes_sql.replace("JULIANDAY(?)", "JULIANDAY('now', '-7 days')")).fetchone()[0]
+        last = conn.execute(
+            "SELECT track_id, MAX(COALESCE(ended_at, started_at)) AS at FROM play_events").fetchone()
+
+    last_title = None
+    if last and last["track_id"]:
+        try:
+            meta = load_metadata(last["track_id"])
+            last_title = meta.get("title") if meta else None
+        except Exception:
+            pass
+
+    with _jobs_lock:
+        downloads_active = sum(1 for j in _jobs.values() if j["status"] in ("queued", "running"))
+    with _convert_lock:
+        conversions = len(_converting)   # queued + in progress
+
+    versions = _cached_downloader_versions()
+    return jsonify({
+        "status":               "ok",
+        "tracks":               tracks,
+        "presets":              presets,
+        "listening_today_min":  today_min,
+        "listening_7d_min":     week_min,
+        "last_played":          last["at"] if last else None,
+        "last_played_title":    last_title,
+        "downloads_active":     downloads_active,
+        "conversions_queued":   conversions,
+        "downloader_ok":        bool(versions["yt_dlp"]) and not versions["mismatch"],
+        "yt_dlp":               versions["yt_dlp"],
+    })
 
 
 # ---------------------------------------------------------------------------
